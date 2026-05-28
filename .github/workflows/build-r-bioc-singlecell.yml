@@ -25,13 +25,19 @@ env:
   IMAGE: ghcr.io/dom-midas/r-bioc-singlecell
   CONTEXT: images/r-bioc-singlecell
 
+# Image-level group: only one Layer 2 build of this image at a time, regardless
+# of revision. Different revisions still race for the same cache scope, so they
+# must serialize even though they target different tags.
 concurrency:
-  group: build-r-bioc-singlecell-${{ inputs.revision }}
+  group: build-r-bioc-singlecell
   cancel-in-progress: false
 
 jobs:
   build:
     runs-on: ubuntu-24.04
+    # Heavy R + Bioconductor build; the realistic happy path is <20 min.
+    # 90 caps a wedged PPM / pak hang well short of the 6-hour job ceiling.
+    timeout-minutes: 90
     permissions:
       contents: read
       packages: write
@@ -43,15 +49,42 @@ jobs:
       # the published tag cannot drift from what was actually built. This step
       # stays in this caller (not in the composite action) because the tag
       # scheme is specific to R/Bioc images.
+      #
+      # Operator input is read via env (not direct ${{ }} interpolation into
+      # the script body) so a revision like `1"; evil "` cannot escape into
+      # shell execution.
       - name: Derive tag from Dockerfile
         id: meta
+        env:
+          REVISION: ${{ inputs.revision }}
         run: |
           set -euo pipefail
           DF="${CONTEXT}/Dockerfile"
-          BIOC_RELEASE="$(grep -m1 '^ARG BIOC_RELEASE=' "$DF" | cut -d= -f2)"
-          PPM_DATE="$(grep -m1 '^ARG PPM_DATE=' "$DF" | cut -d= -f2)"
-          REV="${{ inputs.revision }}"
-          TAG="bioc${BIOC_RELEASE}-ppm${PPM_DATE}-r${REV}"
+
+          # Strip the ARG prefix, then anything from the first quote/space/
+          # tab/# onward. Survives `ARG X=3.22`, `ARG X="3.22"`,
+          # `ARG X=3.22  # comment`.
+          parse_arg() {
+            grep -m1 "^ARG $1=" "$DF" \
+              | sed "s/^ARG $1=//; s/[\" 	#].*//"
+          }
+          BIOC_RELEASE="$(parse_arg BIOC_RELEASE)"
+          PPM_DATE="$(parse_arg PPM_DATE)"
+
+          if [[ ! "$REVISION" =~ ^[0-9]+$ ]]; then
+            echo "::error::revision must be a positive integer, got: '$REVISION'" >&2
+            exit 1
+          fi
+          if [[ -z "$BIOC_RELEASE" || -z "$PPM_DATE" ]]; then
+            echo "::error::could not parse BIOC_RELEASE ('$BIOC_RELEASE') or PPM_DATE ('$PPM_DATE') from $DF" >&2
+            exit 1
+          fi
+          TAG="bioc${BIOC_RELEASE}-ppm${PPM_DATE}-r${REVISION}"
+          if [[ ! "$TAG" =~ ^bioc[0-9.]+-ppm[0-9-]+-r[0-9]+$ ]]; then
+            echo "::error::derived tag '$TAG' doesn't match expected shape" >&2
+            exit 1
+          fi
+
           echo "tag=$TAG"                                  >> "$GITHUB_OUTPUT"
           echo "build_date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
           echo "### Building \`${IMAGE}:${TAG}\`" >> "$GITHUB_STEP_SUMMARY"

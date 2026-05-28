@@ -100,16 +100,25 @@ runs:
         } >> "$GITHUB_OUTPUT"
         echo "first-ref=$first" >> "$GITHUB_OUTPUT"
 
+    # Login only happens on actual publishes. A pull-only / smoke build of a
+    # public base needs no credentials, and keeping the write-capable token
+    # out of ~/.docker/config.json shrinks blast radius on those runs.
+    # `username` is a fixed non-attacker-controlled value because under the
+    # GHCR token-auth model the password is what authenticates; the username
+    # is only ever recorded, never validated. Using github.actor would leak a
+    # fork-PR triggerer's chosen handle into the audit trail.
     - name: Log in to GHCR
+      if: ${{ inputs.push == 'true' }}
       uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee  # v4.2.0
       with:
         registry: ghcr.io
-        username: ${{ github.actor }}
+        username: ${{ github.repository_owner }}
         password: ${{ inputs.github-token }}
 
-    - name: Refuse to overwrite any existing tag
+    - name: Refuse to overwrite any existing tag (fast-fail)
       if: ${{ inputs.push == 'true' && inputs.enforce-immutability == 'true' }}
       shell: bash
+      timeout-minutes: 2
       env:
         REFS: ${{ steps.refs.outputs.tag-refs }}
       run: |
@@ -127,13 +136,37 @@ runs:
       if: ${{ inputs.free-disk-space == 'true' }}
       shell: bash
       run: |
+        set -euo pipefail
+        # rm -rf already ignores missing paths (-f); set -euo trips on the
+        # remaining failure modes (sudo wedged, mid-delete I/O error), which
+        # are things we'd rather see than swallow.
         sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android \
                     /usr/local/share/powershell /usr/share/swift \
-                    "$AGENT_TOOLSDIRECTORY"
+                    "${AGENT_TOOLSDIRECTORY:-}"
         df -h /
 
     - name: Set up Buildx
       uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5  # v4.1.0
+
+    # Second immutability check, immediately before the build+push. Closes most
+    # of the TOCTOU window between the fast-fail check above and the actual
+    # push: now the only window where a colliding publish slips past is the
+    # build itself. The early check is kept as a fail-fast convenience.
+    - name: Re-check tags right before push (TOCTOU mitigation)
+      if: ${{ inputs.push == 'true' && inputs.enforce-immutability == 'true' }}
+      shell: bash
+      timeout-minutes: 2
+      env:
+        REFS: ${{ steps.refs.outputs.tag-refs }}
+      run: |
+        set -euo pipefail
+        while IFS= read -r ref; do
+          [ -z "$ref" ] && continue
+          if docker buildx imagetools inspect "$ref" >/dev/null 2>&1; then
+            echo "::error::${ref} appeared in the registry while we were preparing the build. Aborting before overwrite." >&2
+            exit 1
+          fi
+        done <<< "$REFS"
 
     - name: Build and push
       id: build
@@ -145,11 +178,25 @@ runs:
         push: ${{ inputs.push }}
         tags: ${{ steps.refs.outputs.tag-refs }}
         build-args: ${{ inputs.build-args }}
-        cache-from: type=gha
-        cache-to: type=gha,mode=max
+        # Per-image cache scope so Layer 2 and Layer 3 (and the smoke test)
+        # cannot cross-pollute. cache-to is suppressed on no-push builds so a
+        # smoke job never writes layers that a real build might pull from.
+        cache-from: type=gha,scope=${{ inputs.image }}
+        cache-to: ${{ inputs.push == 'true' && format('type=gha,mode=max,scope={0}', inputs.image) || '' }}
+
+    - name: Verify push produced a digest
+      if: ${{ inputs.push == 'true' }}
+      shell: bash
+      env:
+        DIGEST: ${{ steps.build.outputs.digest }}
+      run: |
+        if [ -z "$DIGEST" ]; then
+          echo "::error::push reported success but produced no digest; treat as a failed publish." >&2
+          exit 1
+        fi
 
     - name: Summary
-      if: ${{ inputs.push == 'true' }}
+      if: ${{ inputs.push == 'true' && steps.build.outputs.digest != '' }}
       shell: bash
       env:
         REFS: ${{ steps.refs.outputs.tag-refs }}

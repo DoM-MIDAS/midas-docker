@@ -9,6 +9,9 @@ on:
 jobs:
   smoke:
     runs-on: ubuntu-24.04
+    # Smoke = base pull + pak install of three GitHub deps. Comfortably under
+    # 30 minutes when the base is cached; 45 caps a wedged pak install.
+    timeout-minutes: 45
     permissions:
       contents: read
       packages: read   # pulling the base from GHCR
