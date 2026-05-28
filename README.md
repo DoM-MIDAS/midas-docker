@@ -16,6 +16,15 @@ Images are published to **GitHub Container Registry** under
 > One base per *project type*, not per project. If a needed package is used by
 > only one project, add it to that project's Layer 3 Dockerfile instead.
 
+To see what's actually in the registry right now — tags, digests, OCI
+descriptions — run [`scripts/list-images.py`](scripts/list-images.py). It
+prefers a PAT from `git credential` (the `DoM-MIDAS@github.com` entry with
+`read:packages`) to enumerate every package in the org; if no PAT is
+available it falls back to a hardcoded `KNOWN_PACKAGES` list and anonymous
+GHCR endpoints, which only see public packages. Useful flags: `--layer 2`
+to filter by layer label, `--all-tags` for every tag instead of just
+latest, `--json` for machine-readable output.
+
 ## Building a Layer 3 image (in a project repo)
 
 Layer 3 = a single analysis project's image, built `FROM` one of the bases
