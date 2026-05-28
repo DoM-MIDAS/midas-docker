@@ -62,8 +62,16 @@ RUN CODENAME="$(. /etc/os-release && echo "$VERSION_CODENAME")" \
       >> "${R_HOME}/etc/Rprofile.site"
 
 # --- Library paths -----------------------------------------------------------
-# Site library is baked into the image and lives outside any future bind mount.
-ENV R_LIBS_SITE=/opt/R/library
+# /opt/R/library holds everything this Dockerfile installs — auditable
+# separately from what the base image shipped (e.g. `ls /opt/R/library`).
+#
+# R_LIBS_SITE *replaces* the default site-library lookup, so we must list
+# both paths: our /opt/R/library first (writable, takes precedence), and the
+# base's /usr/local/lib/R/site-library second (read-only, ships BiocManager
+# and the Bioc release stack). Drop the second path and R startup dies the
+# next time Rprofile.site evaluates BiocManager::repositories().
+# /usr/local/lib/R/site-library is the rocker/bioconductor convention.
+ENV R_LIBS_SITE=/opt/R/library:/usr/local/lib/R/site-library
 RUN mkdir -p /opt/R/library
 
 # --- CRAN packages (pinned by PPM_DATE) --------------------------------------
@@ -80,7 +88,7 @@ RUN R -q -e "pkgs <- c( \
       'roxyglobals','rstudioapi','rslurm', \
       'testthat','targets' \
     ); \
-    install.packages(pkgs, lib = Sys.getenv('R_LIBS_SITE')); \
+    install.packages(pkgs, lib = '/opt/R/library'); \
     miss <- setdiff(pkgs, rownames(installed.packages())); \
     if (length(miss)) stop('CRAN packages failed to install: ', paste(miss, collapse = ', '))"
 
@@ -90,13 +98,13 @@ RUN R -q -e "pkgs <- c( \
       'scater','scran','DropletUtils','scds','scDblFinder', \
       'slingshot','tradeSeq','ComplexHeatmap','DESeq2','iSEE' \
     ); \
-    BiocManager::install(pkgs, update = FALSE, ask = FALSE, lib = Sys.getenv('R_LIBS_SITE')); \
+    BiocManager::install(pkgs, update = FALSE, ask = FALSE, lib = '/opt/R/library'); \
     miss <- setdiff(pkgs, rownames(installed.packages())); \
     if (length(miss)) stop('Bioconductor packages failed to install: ', paste(miss, collapse = ', '))"
 
 # --- Resolved-version manifest (a build artifact, for auditing) --------------
 RUN R -q -e "write.csv(installed.packages()[, c('Package','Version')], \
-                       file.path(Sys.getenv('R_LIBS_SITE'), 'packages.txt'), \
+                       file.path('/opt/R/library', 'packages.txt'), \
                        row.names = FALSE)"
 
 # --- Ephemeral user library for mid-session install.packages() ---------------
