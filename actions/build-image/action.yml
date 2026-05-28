@@ -118,17 +118,22 @@ runs:
     - name: Refuse to overwrite any existing tag (fast-fail)
       if: ${{ inputs.push == 'true' && inputs.enforce-immutability == 'true' }}
       shell: bash
-      timeout-minutes: 2
       env:
         REFS: ${{ steps.refs.outputs.tag-refs }}
       run: |
         set -euo pipefail
+        # Composite-action steps don't support `timeout-minutes:`, so the
+        # 120s cap lives inside the shell. Fail-closed on a timeout (ec=124)
+        # — a registry hang means we can't tell whether the tag exists, so
+        # proceeding would risk a silent overwrite.
         while IFS= read -r ref; do
           [ -z "$ref" ] && continue
-          if docker buildx imagetools inspect "$ref" >/dev/null 2>&1; then
-            echo "::error::${ref} already exists. Bump the tag/revision." >&2
-            exit 1
-          fi
+          ec=0
+          timeout 120 docker buildx imagetools inspect "$ref" >/dev/null 2>&1 || ec=$?
+          case "$ec" in
+            0)   echo "::error::${ref} already exists. Bump the tag/revision." >&2; exit 1 ;;
+            124) echo "::error::imagetools inspect timed out for ${ref}; failing closed." >&2; exit 1 ;;
+          esac
         done <<< "$REFS"
         echo "All tags are unpublished; proceeding."
 
@@ -155,17 +160,18 @@ runs:
     - name: Re-check tags right before push (TOCTOU mitigation)
       if: ${{ inputs.push == 'true' && inputs.enforce-immutability == 'true' }}
       shell: bash
-      timeout-minutes: 2
       env:
         REFS: ${{ steps.refs.outputs.tag-refs }}
       run: |
         set -euo pipefail
         while IFS= read -r ref; do
           [ -z "$ref" ] && continue
-          if docker buildx imagetools inspect "$ref" >/dev/null 2>&1; then
-            echo "::error::${ref} appeared in the registry while we were preparing the build. Aborting before overwrite." >&2
-            exit 1
-          fi
+          ec=0
+          timeout 120 docker buildx imagetools inspect "$ref" >/dev/null 2>&1 || ec=$?
+          case "$ec" in
+            0)   echo "::error::${ref} appeared in the registry while we were preparing the build. Aborting before overwrite." >&2; exit 1 ;;
+            124) echo "::error::imagetools inspect timed out for ${ref}; failing closed before push." >&2; exit 1 ;;
+          esac
         done <<< "$REFS"
 
     - name: Build and push
