@@ -9,24 +9,24 @@
 # immutability, so the tag IS a stable contract. Swap to @sha256:<digest> if a
 # stricter contract is wanted.
 
-FROM ghcr.io/dom-midas/r-bioc-singlecell:bioc3.22-ppm2026-04-01-r1
+FROM ghcr.io/dom-midas/r-bioc-singlecell:bioc3.22-ppm2026-04-01-r2
 
 # GitHub-only packages pinned by commit SHA — the SHA is the lockfile entry.
-# Genesee is a transitive Imports dep of GeneseeSC; we install it first at a
-# pinned SHA so the later GeneseeSC install (whose Remotes line is unpinned)
-# does not silently grab Genesee@HEAD.
+# pak resolves all three together: when it sees an explicit Genesee@<sha> ref
+# in the install set, it uses that for GeneseeSC's unpinned Remotes:Genesee
+# line rather than silently fetching Genesee@HEAD. No bootstrap-ordering trick
+# needed (compare to remotes::install_github, which would install in argument
+# order and miss this).
 #
-# upgrade = 'never' prevents remotes from re-resolving CRAN/Bioc deps already
-# baked into the base image.
-RUN R -q -e "remotes::install_github( \
+# upgrade = FALSE keeps CRAN/Bioc deps already baked into the base image as-is.
+RUN R -q -e "pak::pkg_install( \
       c( \
         'amcdavid/Genesee@334ac8d7fc0bf2c8904e83b2a4a7e315c6f25c8f', \
         'amcdavid/seurat-disk-lazily@bdd615432527e726d69766f93186021be9636fc2', \
         'amcdavid/GeneseeSC@ff5d5bcd165e766a2b9134815a715176050be16b' \
       ), \
-      lib = Sys.getenv('R_LIBS_SITE'), \
-      upgrade = 'never', \
-      dependencies = TRUE \
+      lib = '/opt/R/library', \
+      upgrade = FALSE \
     ); \
     needed <- c('Genesee', 'SeuratDisk', 'GeneseeSC'); \
     miss <- needed[!vapply(needed, requireNamespace, logical(1), quietly = TRUE)]; \

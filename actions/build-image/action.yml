@@ -1,0 +1,174 @@
+name: 'Build & push container image'
+description: >-
+  Build a Docker image and (optionally) push it to GHCR. Handles disk cleanup,
+  registry login, tag-immutability enforcement, BuildKit setup, and a digest
+  summary. Designed to be called from this repo's Layer 2 build workflow and
+  from arbitrary Layer 3 project repos.
+
+inputs:
+  image:
+    description: >-
+      Image reference base, without a tag. Example:
+      ghcr.io/dom-midas/r-bioc-singlecell
+    required: true
+  tags:
+    description: >-
+      Tags to apply, one per line (or comma-separated). Each becomes
+      <image>:<tag>.
+    required: true
+  context:
+    description: 'Docker build context path'
+    required: false
+    default: '.'
+  dockerfile:
+    description: 'Path to Dockerfile (leave empty for <context>/Dockerfile)'
+    required: false
+    default: ''
+  build-args:
+    description: 'Multiline build args, one KEY=VALUE per line'
+    required: false
+    default: ''
+  push:
+    description: 'Push to the registry (true/false). Default true.'
+    required: false
+    default: 'true'
+  platforms:
+    description: 'Comma-separated build platforms'
+    required: false
+    default: 'linux/amd64'
+  enforce-immutability:
+    description: >-
+      When pushing, refuse to overwrite any tag that already exists in the
+      registry. True/false. Default true.
+    required: false
+    default: 'true'
+  free-disk-space:
+    description: >-
+      Reclaim ~10 GB on the runner before building (matters for heavy bases
+      like Bioconductor + texlive). True/false. Default true.
+    required: false
+    default: 'true'
+  github-token:
+    description: >-
+      Token for GHCR login. Usually ${{ secrets.GITHUB_TOKEN }}; the calling
+      job must declare `permissions: packages: write` (or `: read` for
+      pull-only builds).
+    required: true
+
+outputs:
+  digest:
+    description: 'Image digest of the built (and, if push, published) image'
+    value: ${{ steps.build.outputs.digest }}
+  image-ref:
+    description: 'First tag in <image>:<tag> form, for downstream summaries'
+    value: ${{ steps.refs.outputs.first-ref }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Free disk space
+      if: ${{ inputs.free-disk-space == 'true' }}
+      shell: bash
+      run: |
+        sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android \
+                    /usr/local/share/powershell /usr/share/swift \
+                    "$AGENT_TOOLSDIRECTORY"
+        df -h /
+
+    - name: Normalize tags into full <image>:<tag> refs
+      id: refs
+      shell: bash
+      env:
+        IMAGE: ${{ inputs.image }}
+        TAGS: ${{ inputs.tags }}
+      run: |
+        set -euo pipefail
+        normalized="$(printf '%s' "$TAGS" | tr ',' '\n' | sed '/^[[:space:]]*$/d')"
+        refs=""
+        first=""
+        while IFS= read -r tag; do
+          # trim
+          tag="$(echo "$tag" | awk '{$1=$1;print}')"
+          [ -z "$tag" ] && continue
+          ref="${IMAGE}:${tag}"
+          [ -z "$first" ] && first="$ref"
+          if [ -z "$refs" ]; then refs="$ref"; else refs="${refs}"$'\n'"${ref}"; fi
+        done <<< "$normalized"
+        if [ -z "$first" ]; then
+          echo "::error::no tags provided" >&2
+          exit 1
+        fi
+        {
+          echo 'tag-refs<<EOF'
+          echo "$refs"
+          echo 'EOF'
+        } >> "$GITHUB_OUTPUT"
+        echo "first-ref=$first" >> "$GITHUB_OUTPUT"
+
+    - name: Log in to GHCR
+      uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee  # v4.2.0
+      with:
+        registry: ghcr.io
+        username: ${{ github.actor }}
+        password: ${{ inputs.github-token }}
+
+    - name: Refuse to overwrite any existing tag
+      if: ${{ inputs.push == 'true' && inputs.enforce-immutability == 'true' }}
+      shell: bash
+      env:
+        REFS: ${{ steps.refs.outputs.tag-refs }}
+      run: |
+        set -euo pipefail
+        while IFS= read -r ref; do
+          [ -z "$ref" ] && continue
+          if docker buildx imagetools inspect "$ref" >/dev/null 2>&1; then
+            echo "::error::${ref} already exists. Bump the tag/revision." >&2
+            exit 1
+          fi
+        done <<< "$REFS"
+        echo "All tags are unpublished; proceeding."
+
+    - name: Set up Buildx
+      uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5  # v4.1.0
+
+    - name: Build and push
+      id: build
+      uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf  # v7.2.0
+      with:
+        context: ${{ inputs.context }}
+        file: ${{ inputs.dockerfile }}
+        platforms: ${{ inputs.platforms }}
+        push: ${{ inputs.push }}
+        tags: ${{ steps.refs.outputs.tag-refs }}
+        build-args: ${{ inputs.build-args }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+
+    - name: Summary
+      if: ${{ inputs.push == 'true' }}
+      shell: bash
+      env:
+        REFS: ${{ steps.refs.outputs.tag-refs }}
+        DIGEST: ${{ steps.build.outputs.digest }}
+        IMAGE: ${{ inputs.image }}
+      run: |
+        set -euo pipefail
+        {
+          echo "### Published"
+          echo ""
+          echo "**Image:** \`${IMAGE}\`"
+          echo ""
+          echo "**Tags:**"
+          while IFS= read -r ref; do
+            [ -z "$ref" ] && continue
+            tag="${ref##*:}"
+            echo "- \`${tag}\`"
+          done <<< "$REFS"
+          echo ""
+          echo "**Digest:** \`${DIGEST}\`"
+          echo ""
+          echo "Pin in a downstream Dockerfile:"
+          echo '```dockerfile'
+          echo "FROM ${IMAGE}@${DIGEST}"
+          echo '```'
+        } >> "$GITHUB_STEP_SUMMARY"

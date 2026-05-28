@@ -2,7 +2,8 @@ name: build r-bioc-singlecell
 
 # Manual trigger only for now. The build is heavy; we cut new tags deliberately
 # (Bioc release bumps, PPM refreshes, security rebuilds), not on every push.
-# A `schedule:` or `push:` trigger can be added later without other changes.
+# Almost everything happens inside ./actions/build-image — this file owns only
+# the image-class-specific tag-derivation logic.
 on:
   workflow_dispatch:
     inputs:
@@ -10,7 +11,7 @@ on:
         description: >-
           Image revision for this Bioc+PPM tuple. Bump (1 -> 2 -> ...) when
           rebuilding the SAME Bioc release + PPM date (e.g. a base-OS security
-          patch). The workflow refuses to overwrite an existing tag.
+          patch). The composite action refuses to overwrite an existing tag.
         type: string
         required: true
         default: "1"
@@ -20,37 +21,28 @@ on:
         required: true
         default: true
 
-# Pin everything by digest is the build's job; pin everything by SHA is ours.
-# Each action below is pinned to a commit SHA (version in the trailing comment).
 env:
   IMAGE: ghcr.io/dom-midas/r-bioc-singlecell
   CONTEXT: images/r-bioc-singlecell
 
 concurrency:
-  group: build-r-bioc-singlecell-${{ github.event.inputs.revision }}
+  group: build-r-bioc-singlecell-${{ inputs.revision }}
   cancel-in-progress: false
 
 jobs:
   build:
     runs-on: ubuntu-24.04
     permissions:
-      contents: read       # checkout
-      packages: write       # push to GHCR via GITHUB_TOKEN (repo-scoped; no PAT)
+      contents: read
+      packages: write
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
 
-      # Bioconductor + single-cell stack is multi-GB; default runner disk is
-      # tight. Reclaim space the build doesn't need.
-      - name: Free disk space
-        run: |
-          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android \
-                      /usr/local/share/powershell /usr/share/swift \
-                      "$AGENT_TOOLSDIRECTORY"
-          df -h /
-
       # Single source of truth: read the pinned inputs out of the Dockerfile so
-      # the published tag cannot drift from what was actually built.
+      # the published tag cannot drift from what was actually built. This step
+      # stays in this caller (not in the composite action) because the tag
+      # scheme is specific to R/Bioc images.
       - name: Derive tag from Dockerfile
         id: meta
         run: |
@@ -58,64 +50,21 @@ jobs:
           DF="${CONTEXT}/Dockerfile"
           BIOC_RELEASE="$(grep -m1 '^ARG BIOC_RELEASE=' "$DF" | cut -d= -f2)"
           PPM_DATE="$(grep -m1 '^ARG PPM_DATE=' "$DF" | cut -d= -f2)"
-          REV="${{ github.event.inputs.revision }}"
+          REV="${{ inputs.revision }}"
           TAG="bioc${BIOC_RELEASE}-ppm${PPM_DATE}-r${REV}"
-          echo "bioc_release=$BIOC_RELEASE" >> "$GITHUB_OUTPUT"
-          echo "ppm_date=$PPM_DATE"          >> "$GITHUB_OUTPUT"
-          echo "tag=$TAG"                     >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG"                                  >> "$GITHUB_OUTPUT"
           echo "build_date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
           echo "### Building \`${IMAGE}:${TAG}\`" >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Log in to GHCR
-        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee  # v4.2.0
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      # Enforce tag immutability: never overwrite a published Bioc+PPM+revision.
-      - name: Refuse to overwrite an existing tag
-        run: |
-          if docker buildx imagetools inspect "${IMAGE}:${{ steps.meta.outputs.tag }}" >/dev/null 2>&1; then
-            echo "::error::${IMAGE}:${{ steps.meta.outputs.tag }} already exists. Bump the 'revision' input."
-            exit 1
-          fi
-          echo "Tag is free; proceeding."
-
-      - name: Set up Buildx
-        uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5  # v4.1.0
-
       - name: Build and push
-        id: build
-        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf  # v7.2.0
+        uses: ./actions/build-image
         with:
+          image: ${{ env.IMAGE }}
+          tags: ${{ steps.meta.outputs.tag }}
           context: ${{ env.CONTEXT }}
-          # amd64 only for now. To add Apple Silicon later: set
-          #   platforms: linux/amd64,linux/arm64
-          # and add a docker/setup-qemu-action step (or an arm64 runner matrix).
-          platforms: linux/amd64
-          push: ${{ github.event.inputs.push == 'true' }}
-          tags: ${{ env.IMAGE }}:${{ steps.meta.outputs.tag }}
+          push: ${{ inputs.push }}
           build-args: |
             VCS_REF=${{ github.sha }}
             BUILD_DATE=${{ steps.meta.outputs.build_date }}
-            IMAGE_REVISION=${{ github.event.inputs.revision }}
-          provenance: false   # SLSA build provenance attestation
-          sbom: false         # SBOM attestation
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-      - name: Summary (copy this digest into Layer 3 FROM lines)
-        if: ${{ github.event.inputs.push == 'true' }}
-        run: |
-          {
-            echo "### Published"
-            echo ""
-            echo "Tag:    \`${IMAGE}:${{ steps.meta.outputs.tag }}\`"
-            echo "Digest: \`${{ steps.build.outputs.digest }}\`"
-            echo ""
-            echo "Pin it in a project Dockerfile:"
-            echo '```dockerfile'
-            echo "FROM ${IMAGE}@${{ steps.build.outputs.digest }}"
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
+            IMAGE_REVISION=${{ inputs.revision }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}

@@ -9,7 +9,7 @@
 #   - base image  -> pinned by digest (RELEASE_3_22 => R 4.5.2, Bioc 3.22)
 #   - CRAN pkgs   -> pinned by PPM snapshot date (see PPM_DATE below)
 #   - Bioc pkgs   -> pinned by the Bioconductor release of the base image
-#   - NO GitHub-sourced packages: those belong in a project's Layer 3 image,
+#   - Generally no GitHub-sourced packages: those belong in a project's Layer 3 image,
 #     where they are pinned by commit SHA.
 # =============================================================================
 
@@ -34,6 +34,7 @@ LABEL org.opencontainers.image.title="r-bioc-singlecell" \
       org.opencontainers.image.source="https://github.com/DoM-MIDAS/midas-docker" \
       org.opencontainers.image.revision="${VCS_REF}" \
       org.opencontainers.image.created="${BUILD_DATE}" \
+      org.midas.layer="2" \
       org.midas.bioc-release="${BIOC_RELEASE}" \
       org.midas.ppm-date="${PPM_DATE}" \
       org.midas.image-revision="${IMAGE_REVISION}"
