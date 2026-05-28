@@ -50,9 +50,9 @@ inputs:
     default: 'true'
   github-token:
     description: >-
-      Token for GHCR login. Usually ${{ secrets.GITHUB_TOKEN }}; the calling
-      job must declare `permissions: packages: write` (or `: read` for
-      pull-only builds).
+      Token for GHCR login. Pass `secrets.GITHUB_TOKEN` from the caller; the
+      calling job must declare `permissions: packages: write` (or `: read`
+      for pull-only builds).
     required: true
 
 outputs:
@@ -66,15 +66,10 @@ outputs:
 runs:
   using: 'composite'
   steps:
-    - name: Free disk space
-      if: ${{ inputs.free-disk-space == 'true' }}
-      shell: bash
-      run: |
-        sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android \
-                    /usr/local/share/powershell /usr/share/swift \
-                    "$AGENT_TOOLSDIRECTORY"
-        df -h /
-
+    # Order matters: fail-fast on tag-already-exists *before* spending time on
+    # disk cleanup or buildx setup. Login is the only prerequisite for the
+    # immutability check, so it runs first; everything else is deferred until
+    # we know the build can actually publish.
     - name: Normalize tags into full <image>:<tag> refs
       id: refs
       shell: bash
@@ -127,6 +122,15 @@ runs:
           fi
         done <<< "$REFS"
         echo "All tags are unpublished; proceeding."
+
+    - name: Free disk space
+      if: ${{ inputs.free-disk-space == 'true' }}
+      shell: bash
+      run: |
+        sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android \
+                    /usr/local/share/powershell /usr/share/swift \
+                    "$AGENT_TOOLSDIRECTORY"
+        df -h /
 
     - name: Set up Buildx
       uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5  # v4.1.0
