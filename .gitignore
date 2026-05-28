@@ -1,0 +1,7 @@
+# Local Docker / build scratch
+*.log
+.DS_Store
+
+# Editor
+.vscode/
+.idea/
