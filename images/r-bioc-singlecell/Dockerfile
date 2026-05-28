@@ -74,33 +74,27 @@ RUN CODENAME="$(. /etc/os-release && echo "$VERSION_CODENAME")" \
 ENV R_LIBS_SITE=/opt/R/library:/usr/local/lib/R/site-library
 RUN mkdir -p /opt/R/library
 
-# --- CRAN packages (pinned by PPM_DATE) --------------------------------------
-# Stops the build loudly if anything fails to resolve, rather than shipping a
-# silently incomplete library.
-RUN R -q -e "pkgs <- c( \
-      'tidyverse','data.table','arrow','duckdb', \
-      'glue','fs','here','RcppTOML','jsonlite', \
-      'knitr','rmarkdown','rmdformats', \
-      'ggplot2','ggrepel','patchwork','scales','gt', \
-      'Matrix','matrixStats','broom','lme4', \
-      'Seurat','SeuratObject','harmony', \
-      'rlang','withr','generics','remotes','BiocManager', \
-      'roxyglobals','rstudioapi','rslurm', \
-      'testthat','targets' \
-    ); \
-    install.packages(pkgs, lib = '/opt/R/library'); \
-    miss <- setdiff(pkgs, rownames(installed.packages())); \
-    if (length(miss)) stop('CRAN packages failed to install: ', paste(miss, collapse = ', '))"
+# --- Dependency manifest -----------------------------------------------------
+# manifest/DESCRIPTION is the requirements.in: it declares the top-level R
+# and Bioconductor packages this image bakes. pak resolves it (Imports +
+# transitive) against the PPM snapshot and Bioconductor release pinned
+# above, in a single pass that handles CRAN and Bioc together, and installs
+# in parallel into .libPaths()[1] = /opt/R/library (R_LIBS_USER is set
+# later in the file, so /opt/R/library is currently first).
+#
+# Version-intent constraints (e.g. Seurat >= 4.0.4) belong in the
+# DESCRIPTION's Imports; PPM_DATE provides the resolved-version pin.
+COPY manifest /tmp/manifest
 
-# --- Bioconductor packages (pinned by the base image's Bioc release) ---------
-RUN R -q -e "pkgs <- c( \
-      'S4Vectors','SummarizedExperiment','SingleCellExperiment', \
-      'scater','scran','DropletUtils','scds','scDblFinder', \
-      'slingshot','tradeSeq','ComplexHeatmap','DESeq2','iSEE' \
-    ); \
-    BiocManager::install(pkgs, update = FALSE, ask = FALSE, lib = '/opt/R/library'); \
-    miss <- setdiff(pkgs, rownames(installed.packages())); \
-    if (length(miss)) stop('Bioconductor packages failed to install: ', paste(miss, collapse = ', '))"
+# pak itself: small, install once from PPM, then let it do the heavy lifting.
+RUN R -q -e "install.packages('pak', lib = '/opt/R/library'); \
+              stopifnot(requireNamespace('pak', quietly = TRUE))"
+
+# pak::local_install_deps errors out if any dep fails, so a silent partial
+# install is not a possible outcome. cache_clean removes the multi-hundred-MB
+# download cache before this layer closes.
+RUN R -q -e "pak::local_install_deps('/tmp/manifest', upgrade = TRUE); \
+              pak::cache_clean()"
 
 # --- Resolved-version manifest (a build artifact, for auditing) --------------
 RUN R -q -e "write.csv(installed.packages()[, c('Package','Version')], \

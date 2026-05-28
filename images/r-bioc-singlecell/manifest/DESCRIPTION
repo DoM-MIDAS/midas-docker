@@ -1,0 +1,63 @@
+Package: r.bioc.singlecell.manifest
+Type: Package
+Title: Dependency manifest for the midas r-bioc-singlecell base image
+Version: 0.0.0
+Authors@R:
+    person("DoM-MIDAS", role = c("aut", "cre"),
+           email = "noreply@midas.local")
+Description: Declares the R and
+    Bioconductor stack baked into the ghcr.io/dom-midas/r-bioc-singlecell
+    image; The Dockerfile installs
+    these with pak against the PPM snapshot and Bioconductor release
+    pinned in the Dockerfile, producing the image.  
+    packages.txt at $R_LIBS_SITE captures the exact versions.
+License: GPL-3
+Encoding: UTF-8
+Imports:
+    BiocManager,
+    tidyverse,
+    data.table,
+    arrow,
+    duckdb,
+    glue,
+    fs,
+    here,
+    RcppTOML,
+    jsonlite,
+    knitr,
+    rmarkdown,
+    rmdformats (>= 1.0.2),
+    ggplot2,
+    ggrepel,
+    patchwork,
+    scales,
+    gt,
+    Matrix,
+    matrixStats,
+    broom,
+    lme4,
+    Seurat (>= 4.0.4),
+    SeuratObject,
+    harmony,
+    rlang,
+    withr,
+    generics,
+    remotes,
+    roxyglobals (>= 0.2.1),
+    rstudioapi,
+    rslurm,
+    testthat,
+    targets,
+    S4Vectors,
+    SummarizedExperiment,
+    SingleCellExperiment,
+    scater,
+    scran,
+    DropletUtils,
+    scds,
+    scDblFinder,
+    slingshot,
+    tradeSeq,
+    ComplexHeatmap,
+    DESeq2,
+    iSEE

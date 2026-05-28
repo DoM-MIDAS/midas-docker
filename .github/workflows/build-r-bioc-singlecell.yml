@@ -100,8 +100,8 @@ jobs:
             VCS_REF=${{ github.sha }}
             BUILD_DATE=${{ steps.meta.outputs.build_date }}
             IMAGE_REVISION=${{ github.event.inputs.revision }}
-          provenance: true   # SLSA build provenance attestation
-          sbom: true         # SBOM attestation
+          provenance: false   # SLSA build provenance attestation
+          sbom: false         # SBOM attestation
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
