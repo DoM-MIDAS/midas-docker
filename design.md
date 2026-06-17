@@ -12,6 +12,8 @@ Three mechanisms enable this:
 
 The isolation model here guards against inadvertent access but is probably not sufficient to contain an adversary.
 
+**These layers are independent, and worth keeping that way.** Container isolation and data indirection solve different problems and are useful apart from each other. Data indirection — a single config-driven loader that resolves logical names to physical paths — pays off with no container in sight: develop a pipeline against a small slice and point at the full dataset by editing one config; keep a library of known-problematic inputs and swap them in for regression tests; run the same analysis code across cohorts, sites, or data vintages by changing only `data.toml`. The agent-safety story layers container isolation *on top of* this, but a project can adopt the loader discipline alone and benefit immediately. This separability shapes the rest of the design: the data-indirection machinery is built so it can stand on its own (eventually as a package), and the container machinery is built so it stays out of the analysis code's way (it lives in `.sandbox/`).
+
 ## Phasing
 
 **Phase 1 (MVP)** is data indirection + container isolation + layered Docker images for the package environment. This alone meets typical enterprise requirements — the agent simply cannot reach the real data — and ships with no special tooling. The agent works against example files the operator hand-rolls (a CSV with the right header and a handful of fake rows is usually enough to get started). Most projects can ship with just Phase 1.
@@ -28,7 +30,7 @@ The rest of this document describes Phase 1 in detail, then sketches Phase 2 as 
 
 End-to-end, from project creation through a delivered report:
 
-1. **Create project skeleton.** Scaffold the directory layout below (R/, analysis/, tests/, data/example/, config/, scripts/, Dockerfile, Dockerfile.agent, .gitignore, README.md). A template repo or cookiecutter is enough; the eventual `syngen init` is a convenience.
+1. **Create project skeleton.** Scaffold the directory layout below (R/, analysis/, tests/, data/example/, config/, `.sandbox/`, .gitignore, README.md). midas is best thought of as a project *augmentation*, not a generator: a template repo, cookiecutter, or an existing skeleton lays down the analysis structure, and `midas init` drops in the `.sandbox/` container files plus the `config/` + `data/example/` data-indirection scaffolding on top — detecting R vs. Python from the existing layout. The eventual `syngen init` bundles both. This keeps midas composable with whatever template you already use rather than forcing its own.
 
 2. **Place real data outside the project tree.** Operator moves or symlinks real data to `/rawdata/myproject/`. Nothing in the repo points here.
 
@@ -36,11 +38,11 @@ End-to-end, from project creation through a delivered report:
 
 4. **Hand-roll the example data.** Operator creates `data/example/` with files matching the real-data schema: same logical filenames (as referenced by `config/data.toml.example`), same columns, dtype-correct values, a handful of rows. Five minutes of work for a small project; large or messy schemas justify the Phase 2 tooling.
 
-5. **Edit Dockerfiles.** `Dockerfile` inherits from an org-standard base image (see Containerization below) and adds project-specific packages. `Dockerfile.agent` inherits from `Dockerfile` and adds the agent runtime.
+5. **Edit Dockerfiles.** `.sandbox/Dockerfile` inherits from an org-standard base image (see Containerization below) and adds project-specific packages. `.sandbox/Dockerfile.agent` inherits from it and adds the agent runtime.
 
-6. **Build images.** `docker build -t myproject .` and `docker build -f Dockerfile.agent -t myproject-agent .`. Subsequent builds hit the layer cache and are fast.
+6. **Build images.** `docker build -f .sandbox/Dockerfile -t myproject .` and `docker build -f .sandbox/Dockerfile.agent -t myproject-agent .`. The build context stays the project root, so `COPY` lines still resolve; only the Dockerfile location moved. Subsequent builds hit the layer cache and are fast.
 
-7. **Agent develops against example data.** Operator launches the agent via `./scripts/agent-shell.sh claude` (or `aider`, etc.). The agent sees `data/example/` as the only data, writes analysis code in `R/`, `analysis/`, and `tests/`, runs it, iterates. All file changes are visible to the operator immediately because the project directory is bind-mounted.
+7. **Agent develops against example data.** Operator launches the agent via `./.sandbox/agent-shell.sh claude` (or `aider`, etc.). The agent sees `data/example/` as the only data, writes analysis code in `R/`, `analysis/`, and `tests/`, runs it, iterates. All file changes are visible to the operator immediately because the project directory is bind-mounted.
 
 8. **Operator iterates on real data in parallel.** In their host R session, operator runs the same code the agent is writing, against real data (host loader reads `config/data.toml`). When something breaks on the real distribution that didn't break on the example, operator edits the code in place. Agent sees the edit on its next iteration. No commit cycle.
 
@@ -50,8 +52,13 @@ End-to-end, from project creation through a delivered report:
 
 ```
 myproject/
+├── .sandbox/                     # container mechanism; never imported by analysis code
+│   ├── Dockerfile              # project runtime, inherits from org base
+│   ├── Dockerfile.agent        # agent runtime, inherits from Dockerfile
+│   └── agent-shell.sh          # launcher; picks runtime, sets mounts, runs the agent
 ├── R/                          # library code, sourced by analysis scripts
-│   ├── load.R                  # data-reading chokepoint; all reads go through here
+│   ├── load.R                  # data-access chokepoint: named loaders + shim
+│   ├── _dataloader.R           # vendored generic resolver (data_path, config); → package later
 │   ├── clean.R
 │   ├── model.R
 │   └── plot.R
@@ -66,19 +73,17 @@ myproject/
 │       ├── visits.csv
 │       ├── labs.csv
 │       └── outcomes.xlsx
-├── config/
+├── config/                     # stays at root: the operator hand-edits these
 │   ├── data.toml.example       # COMMITTED. points at data/example.
 │   ├── data.toml               # GITIGNORED (or committed, see below). operator's real-data config.
 │   ├── analysis.toml.example   # COMMITTED. parameters for example data.
 │   └── analysis.toml           # GITIGNORED (or committed, see below). parameters for real data.
-├── scripts/
-│   └── agent-shell.sh          # launcher; runs the agent inside the container
 ├── reports → /reports/myproject  # GITIGNORED symlink, dangling inside container
-├── Dockerfile                  # project runtime, inherits from org base
-├── Dockerfile.agent            # agent runtime, inherits from Dockerfile
 ├── .gitignore
 └── README.md
 ```
+
+Two boundaries are doing work here. `.sandbox/` holds the container *mechanism* — files the analysis never imports, so they tuck out of the way. Everything else is ordinary project content that earns its place at the root: `config/` is hand-edited by the operator and should stay discoverable, `data/example/` is committed fixtures useful to anyone reading the repo, and `R/load.R` is on the import path (see Loader below). A project can adopt the `config/` + loader convention with no `.sandbox/` at all and still get the data-indirection benefits.
 
 ### Files that live outside the project tree
 
@@ -113,6 +118,39 @@ load_outcomes <- function() readxl::read_excel(data_path("outcomes"))
 The loader always reads `config/data.toml`. There is no env-var fallback. The trick that makes this work in both environments is that the agent launcher bind-mounts `config/data.toml.example` over `config/data.toml` inside the container — different content visible to each side, same path in the code.
 
 TOML was chosen over YAML and JSON for these configs: it has comments (unlike JSON), unambiguous types (unlike YAML's implicit `NO → false`, `2.10 → 2.1` coercions), and a single canonical way to write a given structure. For flat-ish, human-edited configs of the kind used here, it is the lowest-footgun option.
+
+### Loader: mechanism vs. discipline, and the path to a package
+
+The loader is the one piece of midas that *cannot* hide in `.sandbox/`, because analysis code imports it. But what leaks into the analysis namespace is a *discipline*, not a *mechanism*. Notice that `load.R` above contains no midas-awareness: it reads a config file and resolves logical names. It does not know it is in a container, and it does not know the config was bind-mount-swapped underneath it. The entire trick — same path, different content per environment — lives in `.sandbox/agent-shell.sh`, which the analysis never sees. What remains in the open is just *a single config-driven data-access chokepoint* — something a well-organized project should have regardless of agents or containers. It carries neither midas's name nor its shape.
+
+That observation suggests a split. The loader has two parts with different ownership:
+
+- **Generic resolver** (`data_path`, config discovery, parsing, validation, the "did you `cp data.toml.example`?" guard, optional format dispatch). Identical across every project. This is the part worth packaging.
+- **Named loaders** (`load_visits`, `load_outcomes`, …). These *are* the project — they declare which logical datasets exist and attach per-dataset typing or cleaning. For an scRNA-seq project a `load_counts()` that assembles a `SingleCellExperiment` with metadata joined is real project code no package should absorb.
+
+**Vendor first, extract later — but vendor as if it were already a package.** Copy the generic resolver into the project as a single file (`R/_dataloader.R`, `src/myproject/_vendor/dataloader.py`) with a clean public surface: `data_path(name) -> path` exported, `.load_config` internal. The project's own `load.R` / `load.py` is a thin shim that pulls the resolver in and defines the named loaders on top:
+
+```r
+# R/load.R — vendored mode
+source("R/_dataloader.R")          # generic resolver
+load_visits <- function() readr::read_csv(data_path("visits"))
+```
+
+Analysis code imports only from `load.R`; it never touches `data_path` or the vendored file directly. Conversion to a real package is then mechanical and touches exactly one file — the shim:
+
+```r
+# R/load.R — package mode (the only line that changes)
+library(midasload)                 # data_path() now comes from the package
+load_visits <- function() readr::read_csv(data_path("visits"))
+```
+
+Python works identically: analysis imports from `myproject.load`, and `load.py`'s top line flips from `from ._vendor.dataloader import data_path` to `from midas_load import data_path`.
+
+To keep the swap mechanical, freeze three things while still vendored: the **public signatures** (`data_path(name) -> path`); the **config contract** (fixed path `config/data.toml`, keys `data_dir` + `[files]` — the package must keep honoring a *known fixed path*, since the bind-mount swap depends on it, and must not "improve" it into a searched path); and the **public-vs-internal boundary**. Don't package on project one — you discover the right API by using it in two or three projects first, and premature extraction freezes the wrong abstraction. When several projects carry the same `_dataloader.R` unmodified, that is the signal to cut the package. Once it is a package it becomes a pinned input like any other: GitHub SHA in the R Dockerfile, hashed entry in `requirements.txt` for Python — no dent in the "Dockerfile is the lockfile" model.
+
+The vendored resolver lives in the source tree, **not** in `.sandbox/`. The rule stays clean: `.sandbox/` holds only things the analysis never imports (container infrastructure); anything on the import path stays in the normal source tree.
+
+**The interface is also the upgrade path to data-as-a-service.** Because every read goes through `load_*()` *calls*, the backing implementation is swappable without touching call sites. Files-via-config today; a service call tomorrow (`load_visits()` → Arrow Flight or parquet-over-HTTP, with the host serving real data and the agent's container reaching a server over example data). The discipline — "all data access goes through `load_*()`" — is identical in both worlds; the microservice is a back-end swap, not a re-architecture. The same chokepoint that makes the project agent-safe is what makes that upgrade free. (This is also the escape hatch for the sensitive-schema case noted at the end of this document.)
 
 ### Config contract
 
@@ -213,7 +251,7 @@ The PPM date in the URL is the lockfile. Rebuilding this image next year from th
 **Layer 3: project image.** Inherits from Layer 2. Adds only project-specific packages.
 
 ```dockerfile
-# myproject/Dockerfile
+# .sandbox/Dockerfile  (build context = project root)
 FROM ghcr.io/yourorg/analysis-base:bioc-3.20-2026-05
 
 # Project-specific CRAN/Bioc packages, picking up the PPM-pinned repos
@@ -246,7 +284,7 @@ The composition is reproducible because none of the inputs change. The `packages
 ### Dockerfile.agent
 
 ```dockerfile
-# Dockerfile.agent
+# .sandbox/Dockerfile.agent
 FROM myproject:latest
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -296,7 +334,7 @@ Projects discover bases by reading this README, picking a tag, and putting it in
 
 **Ownership.** A small platform team or rotating maintainer owns the base-image repo. PRs to add packages go through this team. Most projects do not need to modify the base; the right place to add a needed package is the project's own Dockerfile (Layer 3). A package goes into Layer 2 only if enough projects use it that centralizing is cheaper than per-project duplication.
 
-**Updating a project's base.** Edit the `FROM` line in `myproject/Dockerfile`, `docker build`, run the tests, commit. If the new base brings package version changes that break code, that's regular debugging — not a lockfile-resolution puzzle.
+**Updating a project's base.** Edit the `FROM` line in `.sandbox/Dockerfile`, rebuild, run the tests, commit. If the new base brings package version changes that break code, that's regular debugging — not a lockfile-resolution puzzle.
 
 ### Python variant
 
@@ -348,7 +386,7 @@ Compiled with `pip-compile --generate-hashes` (from `pip-tools`) or `uv pip comp
 **Layer 3: project image.** Same pattern, project-specific lockfile:
 
 ```dockerfile
-# myproject/Dockerfile
+# .sandbox/Dockerfile  (build context = project root)
 FROM ghcr.io/yourorg/py-analysis-base:py3.12-2026-05
 
 COPY requirements.txt /tmp/requirements.txt
@@ -394,9 +432,15 @@ def load_outcomes(): return pd.read_excel(_data_path("outcomes"))
 
 ```
 myproject/
+├── .sandbox/
+│   ├── Dockerfile
+│   ├── Dockerfile.agent
+│   └── agent-shell.sh
 ├── src/myproject/
 │   ├── __init__.py
-│   ├── load.py
+│   ├── load.py            # named loaders + shim importing the resolver
+│   ├── _vendor/
+│   │   └── dataloader.py  # vendored generic resolver; → package later
 │   ├── clean.py
 │   └── model.py
 ├── analysis/
@@ -406,9 +450,6 @@ myproject/
 ├── tests/
 ├── data/example/
 ├── config/                # same as R: data.toml.example etc.
-├── scripts/agent-shell.sh
-├── Dockerfile
-├── Dockerfile.agent
 ├── requirements.in
 ├── requirements.txt
 └── README.md
@@ -416,28 +457,59 @@ myproject/
 
 The agent-isolation story is identical; only the package-environment machinery differs.
 
-### scripts/agent-shell.sh
+### .sandbox/agent-shell.sh
 
-The single entry point for launching the agent. The isolation properties depend on the agent *always* being launched through this script.
+The single entry point for launching the agent. The isolation properties depend on the agent *always* being launched through this script. It is also the one place where the container runtime is chosen, so the rest of the project stays runtime-agnostic.
 
 ```bash
 #!/usr/bin/env bash
 set -euo pipefail
 
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+IMAGE="myproject-agent:latest"
 
-docker run --rm -it \
-  --user "$(id -u):$(id -g)" \
-  -v "${PROJECT_DIR}:/workspace" \
-  -v "${PROJECT_DIR}/config/data.toml.example:/workspace/config/data.toml:ro" \
-  -v "${PROJECT_DIR}/config/analysis.toml.example:/workspace/config/analysis.toml:ro" \
-  -v "${PROJECT_DIR}/data/example:/workspace/data/example:ro" \
-  -w /workspace \
-  myproject-agent:latest \
-  "$@"
+# Shared mount contract — identical regardless of runtime.
+MOUNTS=(
+  -v "${PROJECT_DIR}:/workspace"
+  -v "${PROJECT_DIR}/config/data.toml.example:/workspace/config/data.toml:ro"
+  -v "${PROJECT_DIR}/config/analysis.toml.example:/workspace/config/analysis.toml:ro"
+  -v "${PROJECT_DIR}/data/example:/workspace/data/example:ro"
+)
+
+# Pick a runtime: Apple's `container` on macOS if present, else Docker.
+if [[ "$(uname)" == "Darwin" ]] && command -v container &>/dev/null; then
+  RUNTIME=container
+else
+  RUNTIME=docker
+fi
+
+case "$RUNTIME" in
+  docker)
+    exec docker run --rm -it \
+      --user "$(id -u):$(id -g)" \
+      -e MIDAS_IN_CONTAINER=1 \
+      "${MOUNTS[@]}" -w /workspace "$IMAGE" "$@"
+    ;;
+  container)
+    # Apple Containers run a full Linux VM; uid is handled by a matching
+    # in-image user rather than --user, and flag spellings may drift as
+    # the CLI stabilizes. The mount contract is the same.
+    exec container run --rm -it \
+      -e MIDAS_IN_CONTAINER=1 \
+      "${MOUNTS[@]}" -w /workspace "$IMAGE" "$@"
+    ;;
+esac
 ```
 
 The config-override mounts are what make the single-path loader work: on the host, `config/data.toml` is the operator's real-data config; inside the container, the same path resolves to the committed example. Same code, different content per environment.
+
+**Why the runtime abstraction is cheap.** The isolation contract — *what* is mounted, what is read-only, what is absent — is runtime-independent; only the CLI invocation differs. Both Docker and Apple's `container` consume the same OCI images, so the Dockerfiles in `.sandbox/` do not change at all. The differences are confined to this one script:
+
+- **User-id mapping.** Docker's `--user "$(id -u):$(id -g)"` writes host-owned files. Apple Containers run a real Linux VM where uid mapping works differently; prefer a matching non-root user baked into the image over `--user`.
+- **Filesystem sharing.** Apple's VM-backed shares differ from Docker's bind mounts in latency, fsevents propagation, and case sensitivity — which matters here because the project directory is read-write shared by both operator and agent.
+- **Network.** Both can isolate networking, but the flags differ (`--network none` vs. the Virtualization.framework equivalent); see Network policy.
+
+Keep the abstraction at this shell level — a `_run_docker`/`_run_apple` split sharing one mount list — and resist inventing a config DSL for it. Apple Containers are new (macOS 26), so the second code path will need revision as the CLI settles; the blast radius is this file alone.
 
 ### Bind mount contract
 
@@ -460,9 +532,9 @@ The launcher above does *not* set `--network none`. Agent CLIs need to reach the
 
 The isolation is convention-enforced for one thing:
 
-1. **The agent must be launched through `scripts/agent-shell.sh`.** Running the agent CLI directly on the host bypasses the container entirely. README must call this out; a wrapper script that errors if it detects it's running on the host (no `/.dockerenv`) catches accidents.
+1. **The agent must be launched through `.sandbox/agent-shell.sh`.** Running the agent CLI directly on the host bypasses the container entirely. README must call this out; a guard that errors when it does not detect a container catches accidents. Don't rely on `/.dockerenv` alone — it is Docker-specific and absent under Apple Containers; have the launcher inject a marker (the `-e MIDAS_IN_CONTAINER=1` above) and check for that instead.
 
-A second item is convention-but-not-security: the committed `*.example` config files should contain only example paths (`data/example`, synthetic IDs). Don't paste real paths or values into them — they're committed, so the cost of a slip is a commit revert. The bind mount protects the agent's runtime view regardless, so this is hygiene, not a boundary.
+A second item is convention-but-not-security: the committed `*.example` config files should contain only example paths (`data/example`, synthetic IDs). Don't paste real paths or values into them — they're committed, so the cost of a slip is a git history rewrite. The bind mount protects the agent's runtime view regardless, so this is hygiene, not a boundary.
 
 ### What this does and does not prevent
 
@@ -492,7 +564,7 @@ Five subcommands.
 
 ### `syngen init <project_name>`
 
-Scaffolds a new project. Same job as the Phase-1 cookiecutter, just one command.
+Scaffolds a new project, or augments an existing skeleton (Genesee, a cookiecutter) with the `.sandbox/` and data-indirection files. Same job as the Phase-1 `midas init`, just bundled with syngen.
 
 ### `syngen generate-manifest --from <real_data_dir> --out syngen.toml`
 
