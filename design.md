@@ -2,21 +2,21 @@
 
 ## Goal
 
-Enable a coding agent to work on a statistics or bioinformatics project end-to-end without ever touching the real data, while the operator works on the same project directory with full data access. Both processes edit the same files; changes flow between them through the shared filesystem with no commits required.
+Coding agents for statistics or bioinformatics projects that are prevented from touching the real data, but have enough context to write/run/debug workflows.  A human operator works on the same project directory with full data access. Both processes edit the same files; changes flow between them through the shared filesystem.
 
-Three mechanisms combine, in order of importance for the threat model:
+Three mechanisms enable this:
 
-1. **Data indirection.** Real data lives at a path separate from the code, declared in a config file. All reads go through a single loader that resolves logical names through this config.
-2. **Container isolation.** The agent's process runs in a container whose filesystem view does not include the real data path. Even if the agent constructed the path string, the file is not there.
+1. **Data indirection.** Real data lives at a path separate from the code, and is declared in a config file. All reads go through a single loader that resolves logical names through this config.
+2. **Container isolation.** The agent's process runs in a container or vm whose filesystem does not include the real data path. Even if the agent constructed the path string, the file will not be mounted.
 3. **Synthetic mirror data** (committed at `data/example/`, schema-faithful to the real data) makes the agent more productive — it executes and debugs against realistic-shaped data rather than working blind.
 
-Threat model: inadvertent access, not adversarial. The goal is to make the easy failure mode (agent globs `data/`, hardcodes a path, autocompletes a filename) impossible, not to defeat a determined attacker.
+The isolation model here guards against inadvertent access but is probably not sufficient to contain an adversary.
 
 ## Phasing
 
-The design splits cleanly into two phases. **Phase 1 (MVP)** is data indirection + container isolation + layered Docker images for the package environment. This alone meets typical enterprise requirements — the agent simply cannot reach the real data — and ships with no special tooling. The agent works against example files the operator hand-rolls (a CSV with the right header and a handful of fake rows is usually enough to get started). Most projects can ship with just Phase 1.
+**Phase 1 (MVP)** is data indirection + container isolation + layered Docker images for the package environment. This alone meets typical enterprise requirements — the agent simply cannot reach the real data — and ships with no special tooling. The agent works against example files the operator hand-rolls (a CSV with the right header and a handful of fake rows is usually enough to get started). Most projects can ship with just Phase 1.
 
-**Phase 2 (future)** is the `syngen` tool for generating and maintaining schema-faithful synthetic mirrors automatically. This is a productivity layer on top of Phase 1, not a safety boundary. Worth building once Phase 1 is in production and the operator has felt the friction of hand-maintaining example data.
+**Phase 2 (later)** is the `syngen` tool for generating and maintaining schema-faithful synthetic mirrors automatically. This is a productivity layer on top of Phase 1.
 
 The rest of this document describes Phase 1 in detail, then sketches Phase 2 as future work.
 
