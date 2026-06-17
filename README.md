@@ -1,8 +1,9 @@
 # midas-docker
 
-Org-standard **base images** (Layers 1–2 of the [design](design.md)) for
-agent-safe analysis projects. Project repos build their own Layer 3 image
-`FROM` one of these.
+Org-standard **base images** (Layers 1–2) for agent-safe analysis projects.
+Project repos build their own Layer 3 image `FROM` one of these. The
+project-side tooling and the overall design live in the companion **sandy**
+repo.
 
 Images are published to **GitHub Container Registry** under
 `ghcr.io/dom-midas/` and are **public** — no auth needed to pull.
