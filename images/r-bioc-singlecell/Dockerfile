@@ -50,15 +50,30 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
  && rm -rf /var/lib/apt/lists/*
 
 # --- R repositories: freeze CRAN to a PPM snapshot ---------------------------
-# All install.packages() calls below resolve against PPM frozen at PPM_DATE,
-# using prebuilt binaries for this image's Ubuntu codename (no compilation).
-# BiocManager::repositories() supplies the matching Bioconductor release repos.
+# Every CRAN install below must resolve against PPM frozen at PPM_DATE, using
+# prebuilt binaries for this image's Ubuntu codename (no compilation). This is
+# subtler than it looks because pak is what actually does the installing:
+#
+#   1. pak only recognises a repo as CRAN if it is *named* "CRAN". A repo named
+#      anything else (e.g. "PPM") is treated as a generic cranlike repo, and pak
+#      then appends its OWN default CRAN (cran.rstudio.com, undated/latest) so it
+#      has a canonical CRAN to resolve against. pak picks the highest version
+#      across all repos, so that latest mirror silently wins over the snapshot.
+#   2. BiocManager::repositories() returns the Bioc repos PLUS its own CRAN entry
+#      pointing at latest CRAN — a second undated mirror, even if we name ours
+#      "CRAN". So we must overwrite that entry, not sit beside it.
+#
+# Hence: build the repo set from BiocManager::repositories() and force its CRAN
+# entry to the dated snapshot. Result is exactly one CRAN repo == the snapshot,
+# and pak adds no latest mirror. The check below (pak::repo_get) enforces this.
 RUN CODENAME="$(. /etc/os-release && echo "$VERSION_CODENAME")" \
  && printf '%s\n' \
-      "options(repos = c(" \
-      "  PPM = \"https://packagemanager.posit.co/cran/__linux__/${CODENAME}/${PPM_DATE}\"," \
-      "  BioC = BiocManager::repositories()" \
-      "))" \
+      'local({' \
+      "  ppm <- \"https://packagemanager.posit.co/cran/__linux__/${CODENAME}/${PPM_DATE}\"" \
+      '  repos <- BiocManager::repositories()' \
+      '  repos[["CRAN"]] <- ppm' \
+      '  options(repos = repos)' \
+      '})' \
       'options(Ncpus = max(1L, parallel::detectCores()))' \
       >> "${R_HOME}/etc/Rprofile.site"
 
@@ -90,6 +105,22 @@ COPY manifest /tmp/manifest
 # pak itself: small, install once from PPM, then let it do the heavy lifting.
 RUN R -q -e "install.packages('pak', lib = '/opt/R/library'); \
               stopifnot(requireNamespace('pak', quietly = TRUE))"
+
+# --- Repository pin assertion (fail the build if the snapshot is bypassed) ----
+# pak::repo_get() returns the exact repo set pak will resolve against, INCLUDING
+# any latest-CRAN mirror pak auto-injects or that BiocManager smuggles in. We
+# assert: exactly one CRAN-type repo, it IS the PPM_DATE snapshot, and no known
+# latest mirror appears anywhere. If a future edit renames the repo, drops the
+# CRAN override, or bumps PPM_DATE inconsistently, this stops the build here —
+# before the manifest install bakes latest packages into the image.
+RUN R -q -e "ppm_date <- '${PPM_DATE}'; \
+    rg <- pak::repo_get(bioc = FALSE); \
+    cran <- rg[rg\$type == 'cran', , drop = FALSE]; \
+    if (nrow(cran) != 1L) stop('repo-pin check: expected exactly 1 CRAN repo, got ', nrow(cran)); \
+    if (!grepl(ppm_date, cran\$url, fixed = TRUE)) stop('repo-pin check: CRAN repo is not the PPM_DATE snapshot: ', cran\$url); \
+    bad <- grep('cran[.]rstudio[.]com|cran[.]r-project[.]org|/cran/latest', rg\$url, value = TRUE); \
+    if (length(bad)) stop('repo-pin check: undated CRAN mirror leaked into repo set: ', paste(bad, collapse = ', ')); \
+    cat('repo-pin check OK: CRAN frozen at', cran\$url, '\n')"
 
 # pak::local_install_deps errors out if any dep fails, so a silent partial
 # install is not a possible outcome. cache_clean removes the multi-hundred-MB
