@@ -1,9 +1,9 @@
 name: build py-analysis-base
 
 # Manual trigger only. We cut new tags deliberately (Python version bumps, PyPI
-# snapshot refreshes, security rebuilds), not on every push. Almost everything
-# happens inside ./actions/build-image — this file owns only the image-class-
-# specific tag-derivation logic.
+# snapshot refreshes, security rebuilds), not on every push. All the mechanics
+# live in the reusable _build-base-image workflow; this file owns only the
+# per-image tag shape and the concurrency group.
 on:
   workflow_dispatch:
     inputs:
@@ -11,8 +11,7 @@ on:
         description: >-
           Image revision for this PyVersion+PyPI tuple. Bump (1 -> 2 -> ...)
           when rebuilding the SAME Python version + PyPI date (e.g. a base-OS
-          security patch). The composite action refuses to overwrite an
-          existing tag.
+          security patch). The build refuses to overwrite an existing tag.
         type: string
         required: true
         default: "1"
@@ -21,10 +20,6 @@ on:
         type: boolean
         required: true
         default: true
-
-env:
-  IMAGE: ghcr.io/dom-midas/py-analysis-base
-  CONTEXT: images/py-analysis-base
 
 # Image-level group: only one Layer 2 build of this image at a time, regardless
 # of revision. Different revisions still race for the same cache scope, so they
@@ -35,70 +30,15 @@ concurrency:
 
 jobs:
   build:
-    runs-on: ubuntu-24.04
-    # pip install of a wheel-only scientific stack is fast; 45 caps a wedged
-    # resolve or an sdist that has to compile.
-    timeout-minutes: 45
-    permissions:
-      contents: read
-      packages: write
-    steps:
-      - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
-
-      # Single source of truth: read the pinned inputs out of the Dockerfile so
-      # the published tag cannot drift from what was actually built. This step
-      # stays in this caller (not in the composite action) because the tag
-      # scheme is specific to Python images.
-      #
-      # Operator input is read via env (not direct ${{ }} interpolation into
-      # the script body) so a revision like `1"; evil "` cannot escape into
-      # shell execution.
-      - name: Derive tag from Dockerfile
-        id: meta
-        env:
-          REVISION: ${{ inputs.revision }}
-        run: |
-          set -euo pipefail
-          DF="${CONTEXT}/Dockerfile"
-
-          # Strip the ARG prefix, then anything from the first quote/space/
-          # tab/# onward. Survives `ARG X=3.12`, `ARG X="3.12"`,
-          # `ARG X=3.12  # comment`.
-          parse_arg() {
-            grep -m1 "^ARG $1=" "$DF" \
-              | sed "s/^ARG $1=//; s/[\" 	#].*//"
-          }
-          PY_VERSION="$(parse_arg PY_VERSION)"
-          PYPI_DATE="$(parse_arg PYPI_DATE)"
-
-          if [[ ! "$REVISION" =~ ^[0-9]+$ ]]; then
-            echo "::error::revision must be a positive integer, got: '$REVISION'" >&2
-            exit 1
-          fi
-          if [[ -z "$PY_VERSION" || -z "$PYPI_DATE" ]]; then
-            echo "::error::could not parse PY_VERSION ('$PY_VERSION') or PYPI_DATE ('$PYPI_DATE') from $DF" >&2
-            exit 1
-          fi
-          TAG="py${PY_VERSION}-${PYPI_DATE}-r${REVISION}"
-          if [[ ! "$TAG" =~ ^py[0-9.]+-[0-9-]+-r[0-9]+$ ]]; then
-            echo "::error::derived tag '$TAG' doesn't match expected shape" >&2
-            exit 1
-          fi
-
-          echo "tag=$TAG"                                  >> "$GITHUB_OUTPUT"
-          echo "build_date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
-          echo "### Building \`${IMAGE}:${TAG}\`" >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Build and push
-        uses: ./actions/build-image
-        with:
-          image: ${{ env.IMAGE }}
-          tags: ${{ steps.meta.outputs.tag }}
-          context: ${{ env.CONTEXT }}
-          push: ${{ inputs.push }}
-          build-args: |
-            VCS_REF=${{ github.sha }}
-            BUILD_DATE=${{ steps.meta.outputs.build_date }}
-            IMAGE_REVISION=${{ inputs.revision }}
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+    uses: ./.github/workflows/_build-base-image.yml
+    with:
+      image: ghcr.io/dom-midas/py-analysis-base
+      context: images/py-analysis-base
+      arg-names: PY_VERSION PYPI_DATE
+      tag-template: 'py${PY_VERSION}-${PYPI_DATE}-r${REVISION}'
+      tag-regex: '^py[0-9.]+-[0-9-]+-r[0-9]+$'
+      revision: ${{ inputs.revision }}
+      push: ${{ inputs.push }}
+      # pip install of a wheel-only scientific stack is fast; 45 caps a wedged
+      # resolve or an sdist that has to compile.
+      timeout-minutes: 45

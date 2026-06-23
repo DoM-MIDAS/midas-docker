@@ -1,0 +1,133 @@
+name: _build-base-image
+
+# Reusable building block for the per-image Layer 2 build workflows. Not
+# directly runnable (workflow_call only). It owns everything the two base
+# builds share: checkout, tag derivation from the Dockerfile's pinned ARGs,
+# build-date stamping, and the hand-off to the build-image composite action.
+#
+# What stays in the caller: the image/context, the concurrency group, the
+# timeout, and the IMAGE-CLASS-SPECIFIC tag shape (which ARGs encode the
+# reproducibility inputs, the tag template, and its validation regex). Those
+# are passed in as inputs so this file has no per-image knowledge.
+on:
+  workflow_call:
+    inputs:
+      image:
+        description: 'Image ref base without a tag (ghcr.io/<owner>/<name>).'
+        type: string
+        required: true
+      context:
+        description: 'Docker build context; its Dockerfile supplies the ARGs.'
+        type: string
+        required: true
+      arg-names:
+        description: >-
+          Space-separated Dockerfile ARG names to read (e.g.
+          "PY_VERSION PYPI_DATE"). Each is parsed and made available to
+          tag-template as ${NAME}.
+        type: string
+        required: true
+      tag-template:
+        description: >-
+          Tag with ${ARG} / ${REVISION} placeholders, e.g.
+          'py${PY_VERSION}-${PYPI_DATE}-r${REVISION}'. Placeholders are
+          substituted literally (no shell eval).
+        type: string
+        required: true
+      tag-regex:
+        description: 'POSIX ERE the derived tag must match, anchored with ^...$.'
+        type: string
+        required: true
+      revision:
+        description: 'Build revision; must be a positive integer.'
+        type: string
+        required: true
+      push:
+        description: 'Push to GHCR (false = build-only dry run).'
+        type: boolean
+        required: true
+      timeout-minutes:
+        description: 'Job timeout.'
+        type: number
+        required: false
+        default: 60
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        with:
+          # The build doesn't need git credentials; don't leave the token in
+          # .git/config where a build step could read it.
+          persist-credentials: false
+
+      # Single source of truth: derive the published tag from the Dockerfile's
+      # pinned ARGs so it can't drift from what was actually built. Operator
+      # input and the caller-supplied template/regex are read via env (never
+      # interpolated into the script body) so nothing can escape into shell
+      # execution. Placeholder substitution is literal string replacement, not
+      # eval.
+      - name: Derive tag from Dockerfile
+        id: meta
+        env:
+          REVISION: ${{ inputs.revision }}
+          ARG_NAMES: ${{ inputs.arg-names }}
+          TAG_TEMPLATE: ${{ inputs.tag-template }}
+          TAG_REGEX: ${{ inputs.tag-regex }}
+          IMAGE: ${{ inputs.image }}
+          CONTEXT: ${{ inputs.context }}
+        run: |
+          set -euo pipefail
+          DF="${CONTEXT}/Dockerfile"
+
+          if [[ ! "$REVISION" =~ ^[0-9]+$ ]]; then
+            echo "::error::revision must be a positive integer, got: '$REVISION'" >&2
+            exit 1
+          fi
+
+          # Strip the ARG prefix, then anything from the first quote/space/
+          # tab/# onward. Survives `ARG X=3.13`, `ARG X="3.13"`,
+          # `ARG X=3.13  # comment`.
+          parse_arg() {
+            grep -m1 "^ARG $1=" "$DF" \
+              | sed "s/^ARG $1=//; s/[\" 	#].*//"
+          }
+
+          TAG="$TAG_TEMPLATE"
+          for name in $ARG_NAMES; do
+            val="$(parse_arg "$name")"
+            if [[ -z "$val" ]]; then
+              echo "::error::could not parse ARG $name from $DF" >&2
+              exit 1
+            fi
+            TAG="${TAG//\$\{$name\}/$val}"
+          done
+          TAG="${TAG//\$\{REVISION\}/$REVISION}"
+
+          if [[ ! "$TAG" =~ $TAG_REGEX ]]; then
+            echo "::error::derived tag '$TAG' doesn't match expected shape /$TAG_REGEX/" >&2
+            exit 1
+          fi
+
+          echo "tag=$TAG"                                  >> "$GITHUB_OUTPUT"
+          echo "build_date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+          echo "### Building \`${IMAGE}:${TAG}\`" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Build and push
+        uses: ./actions/build-image
+        with:
+          image: ${{ inputs.image }}
+          tags: ${{ steps.meta.outputs.tag }}
+          context: ${{ inputs.context }}
+          push: ${{ inputs.push }}
+          build-args: |
+            VCS_REF=${{ github.sha }}
+            BUILD_DATE=${{ steps.meta.outputs.build_date }}
+            IMAGE_REVISION=${{ inputs.revision }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}

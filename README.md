@@ -119,11 +119,16 @@ then pulls the image anonymously.
 
 ### Tag vs digest
 
-Within the org, tag-pinning is the default — the publish workflow refuses
-to overwrite an existing tag, so the tag itself is a stable contract. If a
-project wants the stricter "this exact image bytes" guarantee, substitute
-`@sha256:<digest>`; the digest is printed in each build's Actions run
-summary.
+Within the org, tag-pinning is the convenient default and the publish
+workflow makes a **best-effort** attempt to keep tags stable (it aborts a
+build when it can confirm the tag already exists). But **GHCR does not
+enforce tag immutability server-side**, so a tag is a *convention*, not a
+hard guarantee — a determined or careless push could still move it.
+
+If a project needs an iron-clad "this exact image bytes" contract, pin by
+digest: substitute `@sha256:<digest>` for the tag. The digest is printed in
+each build's Actions run summary and never moves. Use it for anything where
+silent drift would be unacceptable (HPC pipelines, published results).
 
 ### Worked example
 
@@ -158,22 +163,30 @@ e.g.                py3.13-2026-05-r1
   base-OS security patch. Bump it rather than overwriting a tag.
 - **No `latest`.** Projects must pin a specific tag/digest so an org-base
   rebuild never silently changes a project's package versions.
-- **Tags are immutable.** The publish workflow refuses to overwrite an
-  existing tag and tells you to bump the revision. The check fires before
-  any disk cleanup or build work, so a duplicate-tag attempt fails within
-  ~10 s of the job starting rather than after a long build.
+- **Tags are stable by convention (best-effort), not enforced.** GHCR has no
+  server-side tag immutability, so the publish workflow does a client-side
+  check and aborts when it can confirm the tag already exists (within ~10 s,
+  before any disk cleanup or build). It tells you to bump the revision. This
+  catches the honest-mistake case; it is not a security boundary. For a hard
+  guarantee, pin downstream by `@sha256:<digest>` (see *Tag vs digest*).
 
 ## Building & publishing a Layer 2 base
 
 Builds run in **GitHub Actions** and push to GHCR using the workflow's
-repo-scoped `GITHUB_TOKEN`. Each image has a thin caller workflow
-([build-r-bioc-singlecell.yml](.github/workflows/build-r-bioc-singlecell.yml),
-[build-py-analysis-base.yml](.github/workflows/build-py-analysis-base.yml)) that
-delegates to the [`actions/build-image`](actions/build-image/) composite
-action — the same composite that Layer 3 project repos call. Per-image
-specifics (the tag-derivation step that reads the pinned inputs out of the
-Dockerfile) stay in the caller; everything generic (login, immutability check,
-buildx, push, digest summary) lives in the composite action.
+repo-scoped `GITHUB_TOKEN`. There are three layers, each owning strictly less:
+
+- **Per-image caller** ([build-r-bioc-singlecell.yml](.github/workflows/build-r-bioc-singlecell.yml),
+  [build-py-analysis-base.yml](.github/workflows/build-py-analysis-base.yml)) —
+  just the `workflow_dispatch` inputs, the concurrency group, and the
+  image-class-specific tag shape (which ARGs encode the inputs, the tag
+  template, its regex). A dozen lines, no logic.
+- **Reusable workflow** ([_build-base-image.yml](.github/workflows/_build-base-image.yml))
+  — the shared build mechanics: checkout, tag derivation from the Dockerfile's
+  pinned ARGs, build-date stamping, hand-off. Both callers share this one file,
+  so the parsing/validation logic exists once.
+- **Composite action** ([`actions/build-image`](actions/build-image/)) — the
+  generic registry plumbing (login, best-effort tag check, buildx, push, digest
+  summary). The same composite that Layer 3 project repos call directly.
 
 To cut a build: **Actions → "build r-bioc-singlecell"** (or **"build
 py-analysis-base"**) **→ Run workflow**, set the `revision` (leave `push`
