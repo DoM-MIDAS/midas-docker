@@ -40,7 +40,7 @@ ARG VCS_REF=unknown
 ARG BUILD_DATE=unknown
 ARG IMAGE_REVISION=1
 LABEL org.opencontainers.image.title="py-singlecell" \
-      org.opencontainers.image.description="MIDAS org base: Python single-cell analysis stack (scanpy w/ built-in scrublet, anndata, mudata, leiden, harmonypy, umap, celltypist, gseapy)" \
+      org.opencontainers.image.description="MIDAS org base: Python single-cell stack (scanpy, anndata, mudata, leiden, umap; harmonypy/scanorama/bbknn batch; scrublet doublets; celltypist; decoupler/gseapy; soupx-python; scirpy; plotnine)" \
       org.opencontainers.image.source="https://github.com/DoM-MIDAS/midas-docker" \
       org.opencontainers.image.revision="${VCS_REF}" \
       org.opencontainers.image.created="${BUILD_DATE}" \
@@ -68,14 +68,24 @@ ENV PATH="$VIRTUAL_ENV/bin:$PATH"
 
 # --- Dependency install: the hash-pinned lockfile ----------------------------
 # --require-hashes refuses anything not pinned by sha256 (typosquat,
-# yanked-and-replaced version); --only-binary=:all: refuses anything that isn't
-# a prebuilt wheel, so a missing-wheel package (e.g. louvain has no cp313 wheel
-# — kept out of this base for exactly that reason) fails loudly here rather than
-# silently triggering a source build with un-pinned PEP 517 build deps.
-# Together: every dep is a pinned, prebuilt wheel.
+# yanked-and-replaced version). --only-binary=:all: makes wheels the default, so
+# a missing-wheel package fails loudly instead of silently triggering a source
+# build with un-pinned PEP 517 build deps.
+#
+# --no-binary names a SHORT, deliberate allowlist of packages we DO build from
+# source because they have no cp313 wheel but are cheap, safe builds: airr,
+# docrep, fbpca are pure-Python; annoy is header-only C++ that compiles with
+# build-essential (no extra system libs). Their sdists are still hash-pinned by
+# --require-hashes, so the source we build is verified. Adding anything here is
+# a conscious decision — keep it in sync with manifest/requirements.in. A
+# package needing a real system library (e.g. pycairo -> libcairo2-dev) would
+# go here AND add an apt line above; none currently do (pycairo is Windows-only
+# and never installs on this base).
 COPY manifest/requirements.txt /tmp/requirements.txt
 RUN pip install --no-cache-dir --upgrade pip \
- && pip install --no-cache-dir --require-hashes --only-binary=:all: -r /tmp/requirements.txt \
+ && pip install --no-cache-dir --require-hashes \
+      --only-binary=:all: --no-binary airr,annoy,docrep,fbpca \
+      -r /tmp/requirements.txt \
  && rm /tmp/requirements.txt
 
 # --- Resolved-version manifest (a build artifact, for auditing) --------------

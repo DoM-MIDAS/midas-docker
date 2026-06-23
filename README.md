@@ -14,7 +14,7 @@ Images are published to **GitHub Container Registry** under
 | --- | --- | --- |
 | [`r-bioc-singlecell`](images/r-bioc-singlecell/) | R 4.5.2 + Bioconductor 3.22; tidyverse, Seurat, scran/scater, DropletUtils, DESeq2, slingshot, ComplexHeatmap, iSEE, … (the GeneseeSC dependency stack) | single-cell / scRNA-seq projects |
 | [`py-analysis-base`](images/py-analysis-base/) | Python 3.13; numpy, pandas, scipy, scikit-learn, pyarrow, polars, matplotlib, seaborn, jupyter, pytest (hash-pinned) | general scientific / stats / ML Python projects |
-| [`py-singlecell`](images/py-singlecell/) | Python 3.13; scanpy (w/ built-in `sc.pp.scrublet` doublets), anndata, mudata, leidenalg, igraph, harmonypy, umap-learn, scikit-image/-misc, celltypist, gseapy, h5py + the scientific stack (hash-pinned). Standalone sibling of py-analysis-base (anndata pins pandas<3) | single-cell / scRNA-seq Python (scanpy) projects |
+| [`py-singlecell`](images/py-singlecell/) | Python 3.13; scanpy, anndata, mudata, leiden/igraph, umap; batch (harmonypy, scanorama, bbknn); doublets (scrublet + built-in `sc.pp.scrublet`); annotation (celltypist); pathways/enrichment (decoupler, gseapy); ambient RNA (soupx-python); immune-repertoire (scirpy); plotnine + scientific stack (hash-pinned). Standalone sibling of py-analysis-base (anndata pins pandas<3) | single-cell / scRNA-seq Python (scanpy) projects |
 
 > One base per *project type*, not per project. If a needed package is used by
 > only one project, add it to that project's Layer 3 Dockerfile instead.
