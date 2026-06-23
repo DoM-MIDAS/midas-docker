@@ -1,0 +1,32 @@
+name: smoke py-singlecell layer 3
+
+# Builds examples/py-singlecell-layer3-smoke/Dockerfile against the published
+# base image. The Dockerfile itself runs the smoke checks (pip install + a real
+# scanpy pipeline). Nothing is pushed; build success is the pass condition.
+on:
+  workflow_dispatch:
+
+jobs:
+  smoke:
+    runs-on: ubuntu-24.04
+    # Smoke = base pull + pip install of one project dep + a small pipeline.
+    # Comfortably under 20 minutes when the base is cached; 30 caps a wedged
+    # install.
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: read   # pulling the base from GHCR
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Build (no push) — the Dockerfile runs the smoke checks
+        uses: ./actions/build-image
+        with:
+          image: smoke/py-singlecell-layer3
+          tags: smoke
+          context: examples/py-singlecell-layer3-smoke
+          push: false
+          github-token: ${{ secrets.GITHUB_TOKEN }}

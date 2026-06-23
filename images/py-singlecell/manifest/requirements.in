@@ -1,0 +1,39 @@
+# =============================================================================
+# Dependency manifest (requirements.in) for the midas py-singlecell image.
+#
+# Layer 2 base for single-cell / scRNA-seq analysis in Python (the scanpy
+# ecosystem) — the Python sibling of r-bioc-singlecell. It is a STANDALONE
+# base (FROM python:3.13-slim), NOT built on top of py-analysis-base: anndata
+# pins pandas<3 while py-analysis-base rides pandas 3.0, so the two cannot
+# share a frozen base. Resolving the whole stack here lets scanpy's
+# constraints (e.g. anndata's pandas ceiling) drive one coherent pin set.
+#
+# Compile to a hash-locked requirements.txt with:
+#   scripts/compile-py-requirements.sh --image py-singlecell 2026-05 3.13
+#
+# Scope: CPU scanpy. GPU single-cell (rapids-singlecell/cupy) belongs on a
+# separate nvidia/cuda-based base. scvi-tools (pulls torch) belongs in a
+# project's Layer 3, not here.
+# =============================================================================
+
+# --- core single-cell stack --------------------------------------------------
+scanpy
+anndata
+leidenalg        # sc.tl.leiden (the default/recommended community detection)
+igraph           # graph backend for leiden
+harmonypy        # batch integration (sc.external.pp.harmony_integrate)
+umap-learn       # sc.tl.umap
+scikit-misc      # highly_variable_genes(flavor="seurat_v3") loess
+h5py             # .h5ad / .loom IO
+
+# --- analysis + plotting conveniences (resolved together, standalone) --------
+numpy
+pandas
+scipy
+scikit-learn
+numba            # JIT used across umap/scanpy; pin top-level to surface its numpy ceiling
+matplotlib
+seaborn
+pyarrow
+jupyter
+pytest

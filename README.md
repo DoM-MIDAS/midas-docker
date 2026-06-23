@@ -14,6 +14,7 @@ Images are published to **GitHub Container Registry** under
 | --- | --- | --- |
 | [`r-bioc-singlecell`](images/r-bioc-singlecell/) | R 4.5.2 + Bioconductor 3.22; tidyverse, Seurat, scran/scater, DropletUtils, DESeq2, slingshot, ComplexHeatmap, iSEE, … (the GeneseeSC dependency stack) | single-cell / scRNA-seq projects |
 | [`py-analysis-base`](images/py-analysis-base/) | Python 3.13; numpy, pandas, scipy, scikit-learn, pyarrow, polars, matplotlib, seaborn, jupyter, pytest (hash-pinned) | general scientific / stats / ML Python projects |
+| [`py-singlecell`](images/py-singlecell/) | Python 3.13; scanpy, anndata, leidenalg, igraph, harmonypy, umap-learn, scikit-misc, h5py + the scientific stack (hash-pinned). Standalone sibling of py-analysis-base (anndata pins pandas<3) | single-cell / scRNA-seq Python (scanpy) projects |
 
 > One base per *project type*, not per project. If a needed package is used by
 > only one project, add it to that project's Layer 3 Dockerfile instead.
@@ -211,19 +212,26 @@ SHAs. To update them:
   and any `Remotes:` together; you don't choose where the package comes from.
 - **Security rebuild, same inputs**: just bump the `revision` input.
 
-**`py-analysis-base`** (Python/PyPI; the committed hash-pinned lockfile is the
-pin):
+**`py-analysis-base`** and **`py-singlecell`** (Python/PyPI; the committed
+hash-pinned lockfile is the pin). Both use the same flow — pass `--image
+<name>` to the compile script (default is `py-analysis-base`):
 
 - **Bump the PyPI date** (pick up newer PyPI): run
-  `scripts/compile-py-requirements.sh <YYYY-MM>` to recompile
+  `scripts/compile-py-requirements.sh --image <name> <YYYY-MM>` to recompile
   `manifest/requirements.txt`, then set `ARG PYPI_DATE` to match.
 - **Bump the Python version**: change the `FROM` digest *and* `ARG PY_VERSION`,
   recompile the lockfile with the new version, re-resolve the digest with
   `scripts/resolve-pins.sh`.
-- **Add a package**: append to
-  [`images/py-analysis-base/manifest/requirements.in`](images/py-analysis-base/manifest/requirements.in),
+- **Add a package**: append to that image's `manifest/requirements.in`,
   recompile the lockfile, bump the `revision`.
 - **Security rebuild, same inputs**: just bump the `revision` input.
+
+> `py-singlecell` is a **standalone sibling**, not a child of
+> `py-analysis-base`: anndata pins `pandas<3` while the generic base rides
+> pandas 3.0, so they can't share a frozen base. Both bases currently resolve
+> to all-wheels on the amd64 build target; if a dependency has no wheel there
+> (e.g. `louvain` has no cp313 wheel), the default choice is to drop it to
+> Layer 3 rather than pull in a source build.
 
 `scripts/resolve-pins.sh` re-resolves the base-image digest and the Action
 commit SHAs so they are never hand-copied:

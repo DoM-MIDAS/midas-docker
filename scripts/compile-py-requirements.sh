@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Compile the py-analysis-base lockfile from its requirements.in.
+# Compile a Python base image's lockfile from its requirements.in.
 #
 # This is the Python analog of "bumping ARG PPM_DATE": it re-resolves the
-# scientific stack against a PyPI snapshot and writes a fully pinned,
-# hash-locked requirements.txt that the Dockerfile installs with
+# stack against a PyPI snapshot and writes a fully pinned, hash-locked
+# requirements.txt that the Dockerfile installs with
 # `pip install --require-hashes`.
 #
 #   - --universal       resolution carries environment markers, so one lockfile
@@ -13,20 +13,34 @@
 #   - --exclude-newer   freezes resolution to distributions published on or
 #                       before PYPI_DATE. This is the PPM_DATE analog.
 #
-# Requires uv (https://docs.astral.sh/uv/). Read-only except for the output
-# requirements.txt, which is meant to be committed.
+# Works for any image under images/<name>/manifest/requirements.in (e.g.
+# py-analysis-base, py-singlecell). Requires uv (https://docs.astral.sh/uv/).
+# Read-only except for the output requirements.txt, which is meant to be
+# committed.
 #
 # Usage:
-#   scripts/compile-py-requirements.sh                 # defaults below
-#   scripts/compile-py-requirements.sh 2026-11 3.13    # PYPI month, py version
+#   scripts/compile-py-requirements.sh                              # py-analysis-base, defaults
+#   scripts/compile-py-requirements.sh 2026-11 3.13                 # PYPI month, py version
+#   scripts/compile-py-requirements.sh --image py-singlecell 2026-05 3.13
 set -euo pipefail
 
-# Defaults mirror the ARGs in images/py-analysis-base/Dockerfile.
+IMAGE="py-analysis-base"
+if [ "${1:-}" = "--image" ]; then
+  IMAGE="${2:?--image needs a value}"
+  shift 2
+fi
+
+# Defaults mirror the ARGs in images/<image>/Dockerfile.
 PYPI_DATE="${1:-2026-05}"
 PY_VERSION="${2:-3.13}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-MANIFEST_DIR="${SCRIPT_DIR}/../images/py-analysis-base/manifest"
+MANIFEST_DIR="${SCRIPT_DIR}/../images/${IMAGE}/manifest"
+
+if [ ! -f "${MANIFEST_DIR}/requirements.in" ]; then
+  echo "error: no requirements.in at ${MANIFEST_DIR} (is --image '${IMAGE}' right?)" >&2
+  exit 1
+fi
 
 # --exclude-newer wants a full timestamp. PYPI_DATE is a month (YYYY-MM) or a
 # day (YYYY-MM-DD); expand a bare month to "first of the *next* month" so the
@@ -47,6 +61,7 @@ case "$PYPI_DATE" in
 esac
 
 echo "Compiling ${MANIFEST_DIR}/requirements.txt"
+echo "  image          : ${IMAGE}"
 echo "  python-version : ${PY_VERSION}"
 echo "  exclude-newer  : ${EXCLUDE_NEWER}  (PYPI_DATE=${PYPI_DATE})"
 

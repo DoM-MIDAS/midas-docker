@@ -1,0 +1,44 @@
+name: build py-singlecell
+
+# Manual trigger only. We cut new tags deliberately (Python version bumps, PyPI
+# snapshot refreshes, security rebuilds), not on every push. All the mechanics
+# live in the reusable _build-base-image workflow; this file owns only the
+# per-image tag shape and the concurrency group.
+on:
+  workflow_dispatch:
+    inputs:
+      revision:
+        description: >-
+          Image revision for this PyVersion+PyPI tuple. Bump (1 -> 2 -> ...)
+          when rebuilding the SAME Python version + PyPI date (e.g. a base-OS
+          security patch). The build refuses to overwrite an existing tag.
+        type: string
+        required: true
+        default: "1"
+      push:
+        description: "Push to GHCR (uncheck for a build-only dry run)."
+        type: boolean
+        required: true
+        default: true
+
+# Image-level group: only one Layer 2 build of this image at a time, regardless
+# of revision. Different revisions still race for the same cache scope, so they
+# must serialize even though they target different tags.
+concurrency:
+  group: build-py-singlecell
+  cancel-in-progress: false
+
+jobs:
+  build:
+    uses: ./.github/workflows/_build-base-image.yml
+    with:
+      image: ghcr.io/dom-midas/py-singlecell
+      context: images/py-singlecell
+      arg-names: PY_VERSION PYPI_DATE
+      tag-template: 'py${PY_VERSION}-${PYPI_DATE}-r${REVISION}'
+      tag-regex: '^py[0-9.]+-[0-9-]+-r[0-9]+$'
+      revision: ${{ inputs.revision }}
+      push: ${{ inputs.push }}
+      # scanpy stack is wheel-only on the amd64 build target; the install is
+      # fast. 45 caps a wedged resolve or an unexpected sdist compile.
+      timeout-minutes: 45
