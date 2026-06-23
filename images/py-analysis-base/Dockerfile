@@ -70,13 +70,16 @@ ENV PATH="$VIRTUAL_ENV/bin:$PATH"
 
 # --- Dependency install: the hash-pinned lockfile ----------------------------
 # manifest/requirements.txt pins every transitive dependency by version +
-# sha256. --require-hashes refuses to install anything not pinned by hash, so a
-# silent substitution (a typosquat, a yanked-and-replaced version) cannot slip
-# in. pip resolves the architecture-appropriate wheel for THIS container's
-# platform from the hashes recorded for the pinned version.
+# sha256. --require-hashes refuses anything not pinned by hash (typosquat,
+# yanked-and-replaced version); --only-binary=:all: refuses anything that
+# isn't a prebuilt wheel, so a missing-wheel package fails loudly here rather
+# than silently triggering a source build (which would run un-pinned PEP 517
+# build deps and break reproducibility). Together: every dep is a pinned,
+# prebuilt wheel. A package that genuinely needs a source build is a deliberate
+# opt-in (--no-binary <pkg> + its build deps), never an accident.
 COPY manifest/requirements.txt /tmp/requirements.txt
 RUN pip install --no-cache-dir --upgrade pip \
- && pip install --no-cache-dir --require-hashes -r /tmp/requirements.txt \
+ && pip install --no-cache-dir --require-hashes --only-binary=:all: -r /tmp/requirements.txt \
  && rm /tmp/requirements.txt
 
 # --- Resolved-version manifest (a build artifact, for auditing) --------------

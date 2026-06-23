@@ -63,6 +63,7 @@ NET_TIMEOUT = 30  # seconds; per-request
 KNOWN_PACKAGES = [
     "r-bioc-singlecell",
     "py-analysis-base",
+    "py-singlecell",
 ]
 
 

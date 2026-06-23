@@ -1,0 +1,62 @@
+# =============================================================================
+# Dependency manifest (requirements.in) for the midas py-singlecell image.
+#
+# Layer 2 base for single-cell / scRNA-seq analysis in Python (the scanpy
+# ecosystem) — the Python sibling of r-bioc-singlecell. It is a STANDALONE
+# base (FROM python:3.13-slim), NOT built on top of py-analysis-base: anndata
+# pins pandas<3 while py-analysis-base rides pandas 3.0, so the two cannot
+# share a frozen base. Resolving the whole stack here lets scanpy's
+# constraints (e.g. anndata's pandas ceiling) drive one coherent pin set.
+#
+# Compile to a hash-locked requirements.txt with:
+#   scripts/compile-py-requirements.sh --image py-singlecell 2026-05 3.13
+#
+# WHEELS-FIRST, with a SHORT source-build allowlist. The Dockerfile installs
+# with --only-binary=:all: (wheels only) plus --no-binary for a named few that
+# have no cp313 wheel but are cheap, safe source builds (pure-Python, or
+# header-only C++ that needs no system libs beyond build-essential). Keep that
+# allowlist in sync with the Dockerfile. Today it is: airr, annoy, docrep, fbpca.
+#
+# Scope: CPU. GPU single-cell (rapids-singlecell/cupy) belongs on a separate
+# nvidia/cuda base; scvi-tools (pulls torch) belongs in a project's Layer 3.
+# =============================================================================
+
+# --- core single-cell stack --------------------------------------------------
+scanpy           # also provides built-in doublet detection: sc.pp.scrublet
+anndata
+mudata           # multimodal AnnData containers (CITE-seq, multiome)
+leidenalg        # sc.tl.leiden (the default/recommended community detection)
+igraph           # graph backend for leiden
+harmonypy        # batch integration (sc.external.pp.harmony_integrate)
+umap-learn       # sc.tl.umap
+scikit-misc      # highly_variable_genes(flavor="seurat_v3") loess
+scikit-image     # required by sc.pp.scrublet auto-thresholding (scanpy[scrublet])
+h5py             # .h5ad / .loom IO
+
+# --- single-cell companion tools (batteries-included) ------------------------
+# Wheel-clean:
+celltypist       # automated cell-type annotation
+gseapy           # gene-set enrichment (GSEA / Enrichr)
+soupx-python     # ambient-RNA removal (Python port of SoupX)
+# Pulled in via the source-build allowlist (see Dockerfile --no-binary):
+scrublet         # standalone doublet detection (also built into scanpy) -> annoy
+scanorama        # batch integration, sc.external.pp.scanorama          -> annoy
+bbknn            # batch-balanced kNN integration, sc.external.pp.bbknn -> annoy
+decoupler        # transcription-factor / pathway activity              -> docrep
+scirpy           # AIRR / TCR-BCR immune-repertoire analysis            -> airr
+#
+# Still NOT here: cellbender (ambient RNA via deep learning) is torch/GPU and
+# belongs on a GPU base; scvi-tools likewise.
+
+# --- analysis + plotting conveniences (resolved together, standalone) --------
+numpy
+pandas
+scipy
+scikit-learn
+numba            # JIT used across umap/scanpy; pin top-level to surface its numpy ceiling
+matplotlib
+seaborn
+plotnine         # grammar-of-graphics plotting (ggplot2-style)
+pyarrow
+jupyter
+pytest
