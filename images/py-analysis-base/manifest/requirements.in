@@ -1,0 +1,33 @@
+# =============================================================================
+# Dependency manifest (requirements.in) for the midas py-analysis-base image.
+#
+# This is the human-edited, loose-constraint list of TOP-LEVEL packages baked
+# into ghcr.io/dom-midas/py-analysis-base. It is the Python analog of the R
+# image's manifest/DESCRIPTION Imports:.
+#
+# It is NOT what gets installed. It is compiled to a fully pinned, hash-locked
+# requirements.txt (every transitive dep, version + sha256) with:
+#
+#   scripts/compile-py-requirements.sh
+#
+# which runs `uv pip compile --universal --generate-hashes --exclude-newer ...`.
+# The --exclude-newer date is the PyPI-snapshot analog of the R image's
+# PPM_DATE: it freezes resolution to distributions published on or before that
+# date, so the lockfile is reproducible. Edit constraints here, recompile, and
+# commit the regenerated requirements.txt.
+#
+# Version-intent constraints (e.g. numpy>=2.0) belong here; the exact resolved
+# version pin lives in requirements.txt.
+# =============================================================================
+
+numpy>=2.0
+pandas>=2.2
+scipy
+scikit-learn
+pyarrow
+polars
+matplotlib
+seaborn
+jupyter
+pytest
+tomli; python_version < "3.11"   # stdlib's tomllib is 3.11+

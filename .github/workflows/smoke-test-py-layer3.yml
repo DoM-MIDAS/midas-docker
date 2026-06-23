@@ -1,17 +1,17 @@
-name: smoke r-bioc-singlecell layer 3
+name: smoke py-analysis-base layer 3
 
-# Builds examples/layer3-smoke/Dockerfile against the published base image.
-# The Dockerfile itself does the smoke checks (pak install + requireNamespace).
-# Nothing is pushed; build success is the pass condition.
+# Builds examples/py-layer3-smoke/Dockerfile against the published base image.
+# The Dockerfile itself does the smoke checks (pip install + import). Nothing is
+# pushed; build success is the pass condition.
 on:
   workflow_dispatch:
 
 jobs:
   smoke:
     runs-on: ubuntu-24.04
-    # Smoke = base pull + pak install of three GitHub deps. Comfortably under
-    # 30 minutes when the base is cached; 45 caps a wedged pak install.
-    timeout-minutes: 45
+    # Smoke = base pull + pip install of a couple project deps. Comfortably
+    # under 20 minutes when the base is cached; 30 caps a wedged install.
+    timeout-minutes: 30
     permissions:
       contents: read
       packages: read   # pulling the base from GHCR
@@ -24,8 +24,8 @@ jobs:
       - name: Build (no push) — the Dockerfile runs the smoke checks
         uses: ./actions/build-image
         with:
-          image: smoke/r-bioc-singlecell-layer3
+          image: smoke/py-analysis-base-layer3
           tags: smoke
-          context: examples/layer3-smoke
+          context: examples/py-layer3-smoke
           push: false
           github-token: ${{ secrets.GITHUB_TOKEN }}

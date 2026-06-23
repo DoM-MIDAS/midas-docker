@@ -56,9 +56,10 @@ branch_head() {
 # What we pin
 # ---------------------------------------------------------------------------
 
-# Base images: "<repo> <tag>"
+# Base images: "<repo> <tag>". Official images use the library/ namespace.
 BASE_IMAGES=(
   "bioconductor/bioconductor_docker ${1:-RELEASE_3_22}"
+  "library/python 3.13-slim"
 )
 
 # GitHub Actions used in workflows: "<repo> <tag>"

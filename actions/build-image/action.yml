@@ -1,9 +1,9 @@
 name: 'Build & push container image'
 description: >-
   Build a Docker image and (optionally) push it to GHCR. Handles disk cleanup,
-  registry login, tag-immutability enforcement, BuildKit setup, and a digest
-  summary. Designed to be called from this repo's Layer 2 build workflow and
-  from arbitrary Layer 3 project repos.
+  registry login, a best-effort tag-overwrite guard, BuildKit setup, and a
+  digest summary. Designed to be called from this repo's Layer 2 build workflow
+  and from arbitrary Layer 3 project repos.
 
 inputs:
   image:
@@ -38,8 +38,12 @@ inputs:
     default: 'linux/amd64'
   enforce-immutability:
     description: >-
-      When pushing, refuse to overwrite any tag that already exists in the
-      registry. True/false. Default true.
+      When pushing, abort if a tag already exists in the registry. Best-effort:
+      GHCR does not enforce tag immutability server-side, so this is a
+      client-side check that only blocks when it can CONFIRM the tag exists
+      (a registry error during the check warns and proceeds). For an
+      exact-bytes guarantee, pin downstream FROMs by @sha256. True/false.
+      Default true.
     required: false
     default: 'true'
   free-disk-space:
@@ -115,27 +119,15 @@ runs:
         username: ${{ github.repository_owner }}
         password: ${{ inputs.github-token }}
 
-    - name: Refuse to overwrite any existing tag (fast-fail)
+    # Fast-fail before disk cleanup / buildx / the (possibly long) build, so a
+    # duplicate-tag attempt aborts within ~10s. Logic lives in one script
+    # (check-tag-unpublished.sh) shared with the pre-push re-check below.
+    - name: Refuse to overwrite an existing tag (fast-fail, best-effort)
       if: ${{ inputs.push == 'true' && inputs.enforce-immutability == 'true' }}
       shell: bash
       env:
         REFS: ${{ steps.refs.outputs.tag-refs }}
-      run: |
-        set -euo pipefail
-        # Composite-action steps don't support `timeout-minutes:`, so the
-        # 120s cap lives inside the shell. Fail-closed on a timeout (ec=124)
-        # — a registry hang means we can't tell whether the tag exists, so
-        # proceeding would risk a silent overwrite.
-        while IFS= read -r ref; do
-          [ -z "$ref" ] && continue
-          ec=0
-          timeout 120 docker buildx imagetools inspect "$ref" >/dev/null 2>&1 || ec=$?
-          case "$ec" in
-            0)   echo "::error::${ref} already exists. Bump the tag/revision." >&2; exit 1 ;;
-            124) echo "::error::imagetools inspect timed out for ${ref}; failing closed." >&2; exit 1 ;;
-          esac
-        done <<< "$REFS"
-        echo "All tags are unpublished; proceeding."
+      run: bash "$GITHUB_ACTION_PATH/check-tag-unpublished.sh" "fast-fail, pre-build" <<< "$REFS"
 
     - name: Free disk space
       if: ${{ inputs.free-disk-space == 'true' }}
@@ -157,22 +149,12 @@ runs:
     # of the TOCTOU window between the fast-fail check above and the actual
     # push: now the only window where a colliding publish slips past is the
     # build itself. The early check is kept as a fail-fast convenience.
-    - name: Re-check tags right before push (TOCTOU mitigation)
+    - name: Re-check tags right before push (best-effort TOCTOU mitigation)
       if: ${{ inputs.push == 'true' && inputs.enforce-immutability == 'true' }}
       shell: bash
       env:
         REFS: ${{ steps.refs.outputs.tag-refs }}
-      run: |
-        set -euo pipefail
-        while IFS= read -r ref; do
-          [ -z "$ref" ] && continue
-          ec=0
-          timeout 120 docker buildx imagetools inspect "$ref" >/dev/null 2>&1 || ec=$?
-          case "$ec" in
-            0)   echo "::error::${ref} appeared in the registry while we were preparing the build. Aborting before overwrite." >&2; exit 1 ;;
-            124) echo "::error::imagetools inspect timed out for ${ref}; failing closed before push." >&2; exit 1 ;;
-          esac
-        done <<< "$REFS"
+      run: bash "$GITHUB_ACTION_PATH/check-tag-unpublished.sh" "pre-push" <<< "$REFS"
 
     - name: Build and push
       id: build
