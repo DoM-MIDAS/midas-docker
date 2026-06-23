@@ -62,6 +62,7 @@ NET_TIMEOUT = 30  # seconds; per-request
 # sync with images/<name>/Dockerfile when a new base lands.
 KNOWN_PACKAGES = [
     "r-bioc-singlecell",
+    "py-analysis-base",
 ]
 
 

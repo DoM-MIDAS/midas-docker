@@ -13,6 +13,7 @@ Images are published to **GitHub Container Registry** under
 | Image | What's in it | Use for |
 | --- | --- | --- |
 | [`r-bioc-singlecell`](images/r-bioc-singlecell/) | R 4.5.2 + Bioconductor 3.22; tidyverse, Seurat, scran/scater, DropletUtils, DESeq2, slingshot, ComplexHeatmap, iSEE, … (the GeneseeSC dependency stack) | single-cell / scRNA-seq projects |
+| [`py-analysis-base`](images/py-analysis-base/) | Python 3.13; numpy, pandas, scipy, scikit-learn, pyarrow, polars, matplotlib, seaborn, jupyter, pytest (hash-pinned) | general scientific / stats / ML Python projects |
 
 > One base per *project type*, not per project. If a needed package is used by
 > only one project, add it to that project's Layer 3 Dockerfile instead.
@@ -126,22 +127,33 @@ summary.
 
 ### Worked example
 
-[`examples/layer3-smoke/`](examples/layer3-smoke/) is a Layer 3 that
+[`examples/layer3-smoke/`](examples/layer3-smoke/) is an R Layer 3 that
 depends on GeneseeSC + SeuratDisk pinned by SHA, with its own
 *smoke r-bioc-singlecell layer 3* workflow that uses the same composite
 action with `push: false`.
+[`examples/py-layer3-smoke/`](examples/py-layer3-smoke/) is the Python
+equivalent on top of `py-analysis-base`, with the *smoke py-analysis-base
+layer 3* workflow.
 
 ## Tagging scheme
 
-Tags encode the two reproducibility inputs plus a build revision:
+Tags encode the reproducibility inputs plus a build revision. The inputs differ
+by language, but the shape is the same: `<inputs>-r<N>`.
 
 ```
-bioc<RELEASE>-ppm<YYYY-MM-DD>-r<N>
-e.g.  bioc3.22-ppm2026-04-01-r1
+r-bioc-singlecell:  bioc<RELEASE>-ppm<YYYY-MM-DD>-r<N>
+e.g.                bioc3.22-ppm2026-04-01-r1
+
+py-analysis-base:   py<VERSION>-<YYYY-MM>-r<N>
+e.g.                py3.13-2026-05-r1
 ```
 
-- **Bioc release** and **PPM date** are the pinned inputs (CRAN frozen at the
-  PPM date; Bioconductor frozen at the release).
+- **R inputs:** Bioc release + PPM date (CRAN frozen at the PPM date;
+  Bioconductor frozen at the release).
+- **Python inputs:** Python version + PyPI date. The PyPI date is the
+  `--exclude-newer` snapshot the hash-pinned lockfile was compiled against — the
+  PPM-date analog. The lockfile (`manifest/requirements.txt`, every dep pinned
+  by sha256) is the actual contract; the date just records when it was cut.
 - **Revision (`-rN`)** distinguishes rebuilds of the *same* tuple — e.g. a
   base-OS security patch. Bump it rather than overwriting a tag.
 - **No `latest`.** Projects must pin a specific tag/digest so an org-base
@@ -154,25 +166,28 @@ e.g.  bioc3.22-ppm2026-04-01-r1
 ## Building & publishing a Layer 2 base
 
 Builds run in **GitHub Actions** and push to GHCR using the workflow's
-repo-scoped `GITHUB_TOKEN`. The publishing workflow
-([build-r-bioc-singlecell.yml](.github/workflows/build-r-bioc-singlecell.yml))
-is a thin caller of the [`actions/build-image`](actions/build-image/)
-composite action — the same composite that Layer 3 project repos call. Per-
-image specifics (the tag-derivation step that reads `BIOC_RELEASE` /
-`PPM_DATE` out of the Dockerfile) stay in the caller; everything generic
-(login, immutability check, buildx, push, digest summary) lives in the
-composite action.
+repo-scoped `GITHUB_TOKEN`. Each image has a thin caller workflow
+([build-r-bioc-singlecell.yml](.github/workflows/build-r-bioc-singlecell.yml),
+[build-py-analysis-base.yml](.github/workflows/build-py-analysis-base.yml)) that
+delegates to the [`actions/build-image`](actions/build-image/) composite
+action — the same composite that Layer 3 project repos call. Per-image
+specifics (the tag-derivation step that reads the pinned inputs out of the
+Dockerfile) stay in the caller; everything generic (login, immutability check,
+buildx, push, digest summary) lives in the composite action.
 
-To cut a build: **Actions → "build r-bioc-singlecell" → Run workflow**, set
-the `revision` (leave `push` checked). The workflow reads the Bioc release
-and PPM date out of the Dockerfile, so the tag always matches what was
-built.
+To cut a build: **Actions → "build r-bioc-singlecell"** (or **"build
+py-analysis-base"**) **→ Run workflow**, set the `revision` (leave `push`
+checked). The workflow reads the pinned inputs out of the Dockerfile, so the
+tag always matches what was built.
 
 ### Changing what's in a base
 
 This is expected to occur roughly twice a year.
 
-Pins for R are mostly implicit in the Dockerfile (the lockfile) rather than being able to point at shas.  To update the pins:
+Pins are mostly implicit in the Dockerfile / lockfile rather than pointing at
+SHAs. To update them:
+
+**`r-bioc-singlecell`** (R/Bioc; pins are implicit in the Dockerfile):
 
 - **Bump the PPM date** (pick up newer CRAN): edit `ARG PPM_DATE`, re-run.
 - **Bump the Bioconductor release**: change the `FROM` digest *and*
@@ -181,6 +196,20 @@ Pins for R are mostly implicit in the Dockerfile (the lockfile) rather than bein
   [`images/r-bioc-singlecell/manifest/DESCRIPTION`](images/r-bioc-singlecell/manifest/DESCRIPTION).
   Bump the `revision` on the next build. pak resolves CRAN, Bioconductor,
   and any `Remotes:` together; you don't choose where the package comes from.
+- **Security rebuild, same inputs**: just bump the `revision` input.
+
+**`py-analysis-base`** (Python/PyPI; the committed hash-pinned lockfile is the
+pin):
+
+- **Bump the PyPI date** (pick up newer PyPI): run
+  `scripts/compile-py-requirements.sh <YYYY-MM>` to recompile
+  `manifest/requirements.txt`, then set `ARG PYPI_DATE` to match.
+- **Bump the Python version**: change the `FROM` digest *and* `ARG PY_VERSION`,
+  recompile the lockfile with the new version, re-resolve the digest with
+  `scripts/resolve-pins.sh`.
+- **Add a package**: append to
+  [`images/py-analysis-base/manifest/requirements.in`](images/py-analysis-base/manifest/requirements.in),
+  recompile the lockfile, bump the `revision`.
 - **Security rebuild, same inputs**: just bump the `revision` input.
 
 `scripts/resolve-pins.sh` re-resolves the base-image digest and the Action
@@ -194,5 +223,7 @@ scripts/resolve-pins.sh RELEASE_3_22
 
 - Base image pinned by **digest**, not tag.
 - Every GitHub Action pinned by **commit SHA**, not tag (see the `uses:` lines).
-- A resolved `packages.txt` manifest is baked into each image at
-  `${R_LIBS_SITE}/packages.txt` for auditing.
+- `py-analysis-base` installs with `pip install --require-hashes`, so every
+  PyPI dependency is pinned by **sha256** and any unpinned package is refused.
+- A resolved package manifest is baked into each image for auditing:
+  `${R_LIBS_SITE}/packages.txt` (R) and `/opt/packages.txt` (Python).

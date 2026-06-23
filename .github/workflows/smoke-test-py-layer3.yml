@@ -1,0 +1,29 @@
+name: smoke py-analysis-base layer 3
+
+# Builds examples/py-layer3-smoke/Dockerfile against the published base image.
+# The Dockerfile itself does the smoke checks (pip install + import). Nothing is
+# pushed; build success is the pass condition.
+on:
+  workflow_dispatch:
+
+jobs:
+  smoke:
+    runs-on: ubuntu-24.04
+    # Smoke = base pull + pip install of a couple project deps. Comfortably
+    # under 20 minutes when the base is cached; 30 caps a wedged install.
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: read   # pulling the base from GHCR
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+
+      - name: Build (no push) — the Dockerfile runs the smoke checks
+        uses: ./actions/build-image
+        with:
+          image: smoke/py-analysis-base-layer3
+          tags: smoke
+          context: examples/py-layer3-smoke
+          push: false
+          github-token: ${{ secrets.GITHUB_TOKEN }}
