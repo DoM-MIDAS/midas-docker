@@ -17,14 +17,28 @@
 # =============================================================================
 
 # --- core single-cell stack --------------------------------------------------
-scanpy
+scanpy           # also provides built-in doublet detection: sc.pp.scrublet
 anndata
+mudata           # multimodal AnnData containers (CITE-seq, multiome)
 leidenalg        # sc.tl.leiden (the default/recommended community detection)
 igraph           # graph backend for leiden
 harmonypy        # batch integration (sc.external.pp.harmony_integrate)
 umap-learn       # sc.tl.umap
 scikit-misc      # highly_variable_genes(flavor="seurat_v3") loess
+scikit-image     # required by sc.pp.scrublet auto-thresholding (scanpy[scrublet])
 h5py             # .h5ad / .loom IO
+
+# --- single-cell companion tools (batteries-included; all wheel-clean) --------
+# Doublet detection is already built into scanpy (sc.pp.scrublet) — the
+# standalone scrublet/scanorama/bbknn packages are deliberately NOT here: they
+# require `annoy`, which ships no cp313 wheel and would force a source build
+# under the base's --only-binary policy. Add those in Layer 3 if a project
+# wants them. SoupX has no pip equivalent (it's R-only); Python ambient-RNA
+# removal (cellbender) is torch/GPU and belongs on a GPU base, not here.
+# decoupler (TF/pathway activity) is also a Layer 3 add: it pulls docrep, which
+# is sdist-only and would break --only-binary.
+celltypist       # automated cell-type annotation
+gseapy           # gene-set enrichment (GSEA / Enrichr)
 
 # --- analysis + plotting conveniences (resolved together, standalone) --------
 numpy
