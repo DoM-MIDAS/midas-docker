@@ -28,6 +28,11 @@ pyarrow
 polars
 matplotlib
 seaborn
-jupyter
+# Notebook: ship a kernel, not a server. A frontend (VS Code, or a Jupyter on
+# the host) connects to this env's kernel — see images/python/README.md. The
+# full `jupyter`/JupyterLab server is intentionally NOT in the base.
+ipykernel        # the Jupyter kernel for this environment
+ipywidgets       # interactive widgets (tqdm progress, plot controls)
+jupytext         # pair .ipynb <-> .py (git-friendly, agent-editable notebooks)
 pytest
 tomli; python_version < "3.11"   # stdlib's tomllib is 3.11+
