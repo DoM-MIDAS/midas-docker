@@ -58,5 +58,8 @@ matplotlib
 seaborn
 plotnine         # grammar-of-graphics plotting (ggplot2-style)
 pyarrow
-jupyter
+# Notebook: ship a kernel, not a server (see images/python/README.md).
+ipykernel        # the Jupyter kernel for this environment
+ipywidgets       # interactive widgets (tqdm/scanpy progress, plot controls)
+jupytext         # pair .ipynb <-> .py (git-friendly, agent-editable notebooks)
 pytest
